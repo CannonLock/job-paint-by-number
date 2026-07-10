@@ -1,0 +1,13 @@
+{
+  "count": 1968375,
+  "t0": 1779216159,
+  "tMax": 4235843,
+  "maxWait": 3518,
+  "maxDur": 2339,
+  "maxMem": 2048,
+  "maxDisk": 5242880,
+  "gridCols": 1403,
+  "neverRan": 5479,
+  "generatedAt": "2026-07-10T19:38:12.054Z",
+  "source": "chtc_jobs.csv"
+}
