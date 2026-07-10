@@ -213,7 +213,7 @@ export class JobRenderer {
     gl.uniform1f(this.u.uMaxDur, data.meta.maxDur);
     gl.uniform1f(this.u.uMaxMem, data.meta.maxMem);
     gl.uniform1f(this.u.uMaxDisk, data.meta.maxDisk);
-    gl.uniform1f(this.u.uBoxFill, 0.82);
+    gl.uniform1f(this.u.uBoxFill, 1.0);
   }
 
   // The grid's column count is chosen on the client from the window aspect
@@ -232,7 +232,7 @@ export class JobRenderer {
     this.gl.viewport(0, 0, w, h);
   }
 
-  render(camera: Camera, playhead: number, colorMode: number, boxFill = 0.82) {
+  render(camera: Camera, playhead: number, colorMode: number, boxFill = 1.0) {
     const gl = this.gl;
     const w = this.canvas.width;
     const h = this.canvas.height;
