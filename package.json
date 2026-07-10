@@ -1,0 +1,38 @@
+{
+  "name": "badger-hub-website",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "postbuild": "next-image-export-optimizer && next-sitemap",
+    "start": "next start",
+    "lint": "next lint",
+    "analyze": "ANALYZE=true next build"
+  },
+  "dependencies": {
+    "@chtc/web-components": "^1.0.20",
+    "@emotion/cache": "^11.14.0",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^7.3.7",
+    "@mui/material": "^7.3.7",
+    "@mui/material-nextjs": "^7.3.7",
+    "@next/bundle-analyzer": "^15.5.10",
+    "@socialgouv/matomo-next": "^1.11.0",
+    "next": "^16.1.5",
+    "next-image-export-optimizer": "^1.20.1",
+    "next-sitemap": "^4.2.3",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.3",
+    "@types/node": "^20.19.30",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.2",
+    "eslint-config-next": "15.4.6",
+    "typescript": "^5.9.3"
+  }
+}
