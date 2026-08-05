@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Box, MenuItem, Select, Stack, Typography } from "@mui/material";
+import { Box, Button, MenuItem, Select, Stack, Typography } from "@mui/material";
+import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
+import Link from "next/link";
 
 import type { DayData } from "./types";
 import DayDialog from "./_components/DayDialog";
@@ -70,30 +72,53 @@ export default function DaysView({ data }: DaysViewProps) {
           onOpenDetail={() => yesterday && setOpenDay(yesterday)}
         />
 
-        <Box>
-          <Typography
-            variant="overline"
-            component="label"
-            htmlFor="cluster-select"
-            sx={{ color: "text.secondary", display: "block", lineHeight: 1.6 }}
-          >
-            Cluster
-          </Typography>
-          <Select
-            id="cluster-select"
-            size="small"
-            value={cluster}
-            onChange={(event) => setCluster(String(event.target.value))}
-            sx={{ mt: 0.5, minWidth: 260 }}
-          >
-            <MenuItem value={ALL_CLUSTERS}>All clusters ({data.clusters.length})</MenuItem>
-            {data.clusters.map((c) => (
-              <MenuItem key={c.id} value={String(c.id)}>
-                Cluster {c.id} · {c.total.toLocaleString()} jobs
-              </MenuItem>
-            ))}
-          </Select>
-        </Box>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={2}
+          alignItems={{ xs: "stretch", sm: "flex-end" }}
+        >
+          <Box>
+            <Typography
+              variant="overline"
+              component="label"
+              htmlFor="cluster-select"
+              sx={{ color: "text.secondary", display: "block", lineHeight: 1.6 }}
+            >
+              Cluster
+            </Typography>
+            <Select
+              id="cluster-select"
+              size="small"
+              value={cluster}
+              onChange={(event) => setCluster(String(event.target.value))}
+              sx={{ mt: 0.5, minWidth: 260 }}
+            >
+              <MenuItem value={ALL_CLUSTERS}>All clusters ({data.clusters.length})</MenuItem>
+              {data.clusters.map((c) => (
+                <MenuItem key={c.id} value={String(c.id)}>
+                  Cluster {c.id} · {c.total.toLocaleString()} jobs
+                </MenuItem>
+              ))}
+            </Select>
+          </Box>
+
+          {/*
+            The calendar filters in place; the per-cluster runtime, hold and resource
+            analysis is a route of its own so it can be linked and so its baked JSON
+            only loads when asked for.
+          */}
+          {cluster !== ALL_CLUSTERS && (
+            <Button
+              component={Link}
+              href={`/days/cluster/${cluster}`}
+              variant="outlined"
+              size="medium"
+              endIcon={<ArrowForwardIcon />}
+            >
+              Cluster {cluster} detail
+            </Button>
+          )}
+        </Stack>
 
         <MonthSummary
           rollup={rollup}
