@@ -20,7 +20,8 @@ export const metadata: Metadata = {
 };
 
 const pages = [
-	{ label: 'Home Page', path: '/', icon: <PlayArrow /> },
+  { label: 'Large Grid', path: '/', icon: <PlayArrow /> },
+	{ label: 'Daily Breakdown', path: '/days', icon: <PlayArrow /> },
 ]
 
 export default function RootLayout({
