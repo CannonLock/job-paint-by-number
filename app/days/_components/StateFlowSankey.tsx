@@ -32,7 +32,7 @@ const NODE = {
 } as const;
 
 const NODE_NAMES: Record<string, string> = {
-  [NODE.placedToday]: "Placed Today",
+  [NODE.placedToday]: "Placed",
   [NODE.placedBefore]: "Placed Before",
   [NODE.placedPool]: "In Queue",
   [NODE.activeBefore]: "Active Before",
@@ -118,8 +118,8 @@ const NODE_COLORS: Record<string, string> = {
  * colours on the page.
  */
 export const FLOW_LEGEND: { label: string; color: string }[] = [
-  { label: "Placed that day", color: STATE_STYLES.queued.color },
-  { label: "Placed earlier", color: PLACED_BEFORE_COLOR },
+  { label: "Placed", color: STATE_STYLES.queued.color },
+  { label: "Placed before", color: PLACED_BEFORE_COLOR },
   { label: "Already active", color: CARRIED_ACTIVE_COLOR },
   { label: "Became active", color: STATE_STYLES.running.color },
   { label: STATE_STYLES.completed.label, color: STATE_STYLES.completed.color },
