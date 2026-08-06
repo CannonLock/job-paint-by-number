@@ -5,7 +5,7 @@
 // on purpose -- the demo data is a snapshot, and a page that asked the browser for
 // today's date would start showing empty days the morning after it was baked.
 
-import type { DayData, DaySlice, StateCounts } from "../types";
+import type { DayData, DayFlows, DaySlice, StateCounts } from "../types";
 
 export const ALL_CLUSTERS = "all";
 
@@ -13,6 +13,29 @@ const ZERO: StateCounts = [0, 0, 0, 0];
 
 export function addCounts(a: StateCounts, b: StateCounts): StateCounts {
   return [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]];
+}
+
+export const FLOW_KEYS = [
+  "placedTodayToActive",
+  "placedBeforeToActive",
+  "activeToCompleted",
+  "activeToRemoved",
+  "placedTodayToRemoved",
+  "placedBeforeToRemoved",
+  "placedTodayToCompleted",
+  "placedBeforeToCompleted",
+] as const;
+
+function addFlows(a: DayFlows | null, b: DayFlows): DayFlows {
+  if (!a) return { ...b };
+  const out = {} as DayFlows;
+  for (const key of FLOW_KEYS) out[key] = a[key] + b[key];
+  return out;
+}
+
+/** True when any edge carries weight; an all-zero day has nothing to draw. */
+export function hasFlow(flows: DayFlows | null): flows is DayFlows {
+  return !!flows && FLOW_KEYS.some((key) => flows[key] > 0);
 }
 
 /** Local "YYYY-MM-DD" for a Date. Never use toISOString here -- it shifts to UTC. */
@@ -55,6 +78,8 @@ export function buildSliceMap(data: DayData, cluster: string): Map<string, DaySl
       completed: 0,
       removed: 0,
       changed: 0,
+      flows: null,
+      carry: null,
     });
   }
 
@@ -77,6 +102,43 @@ export function buildSliceMap(data: DayData, cluster: string): Map<string, DaySl
     // Summing distinct-job counts across clusters stays a distinct-job count: a job
     // belongs to exactly one cluster.
     slice.changed += row.changed;
+    if (row.flows) slice.flows = addFlows(slice.flows, row.flows);
+  }
+
+  // End-of-day census, summed over the selected clusters.
+  const endOfDay = new Map<string, { placed: number; active: number }>();
+  for (const row of data.carry ?? []) {
+    if (cluster !== ALL_CLUSTERS && String(row.cluster) !== cluster) continue;
+    const entry = endOfDay.get(row.day) ?? { placed: 0, active: 0 };
+    entry.placed += row.placed;
+    entry.active += row.active;
+    endOfDay.set(row.day, entry);
+  }
+
+  // Turn the census into per-day carry-in/carry-out. Day 0 inherits from before the
+  // window, which the census cannot see, so its carry-in is whatever the day's own
+  // flows imply rather than a measured value.
+  if (data.carry) {
+    data.days.forEach((day, index) => {
+      const slice = slices.get(day);
+      if (!slice) return;
+      const today = endOfDay.get(day) ?? { placed: 0, active: 0 };
+      const yesterday = index > 0 ? endOfDay.get(data.days[index - 1]) : undefined;
+      const flows = slice.flows;
+
+      const impliedPlacedIn = flows
+        ? flows.placedBeforeToActive + flows.placedBeforeToRemoved + flows.placedBeforeToCompleted
+        : 0;
+      const impliedActiveIn = flows ? flows.activeToCompleted + flows.activeToRemoved : 0;
+
+      slice.carry = {
+        placedIn: yesterday ? yesterday.placed : impliedPlacedIn,
+        activeIn: yesterday ? yesterday.active : impliedActiveIn,
+        placedOut: today.placed,
+        activeOut: today.active,
+        placedNew: slice.queued,
+      };
+    });
   }
 
   return slices;

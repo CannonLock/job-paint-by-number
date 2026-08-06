@@ -7,10 +7,12 @@ import "react-calendar/dist/Calendar.css";
 
 import type { DaySlice } from "../types";
 import JobGrid from "./JobGrid";
+import StateFlowSankey, { tileFlowHeight } from "./StateFlowSankey";
 import {
   asOfDay,
   compactNumber,
   dayKeyOf,
+  hasFlow,
   isEmptySlice,
   parseDayKey,
 } from "./dayModel";
@@ -25,6 +27,10 @@ interface JobCalendarProps {
   activeStartDate: Date;
   onActiveStartDateChange: (date: Date) => void;
   onSelectDay: (day: string) => void;
+  /** Show the waffle of jobs placed that day. */
+  showPlaced: boolean;
+  /** Show the Sankey of that day's state changes. */
+  showUpdates: boolean;
 }
 
 /**
@@ -44,6 +50,8 @@ export default function JobCalendar({
   activeStartDate,
   onActiveStartDateChange,
   onSelectDay,
+  showPlaced,
+  showUpdates,
 }: JobCalendarProps) {
   const minDate = parseDayKey(firstDay);
   const maxDate = parseDayKey(lastDay);
@@ -97,8 +105,9 @@ export default function JobCalendar({
           alignItems: "center",
           justifyContent: "flex-start",
           gap: "4px",
-          // Tall enough for a 10x10 waffle plus two lines of text.
-          minHeight: { xs: 92, sm: 116 },
+          // Tall enough for the stack: flow slot, its caption, the waffle, its
+          // caption. Content is top-aligned so every tile's rows line up.
+          minHeight: { xs: 150, sm: 186 },
           padding: "6px 4px",
           border: "1px solid",
           borderColor: "divider",
@@ -151,7 +160,7 @@ export default function JobCalendar({
         tileContent={({ date, view }) => {
           if (view !== "month") return null;
           const slice = slices.get(dayKeyOf(date));
-          return <TileBody slice={slice} />;
+          return <TileBody slice={slice} showPlaced={showPlaced} showUpdates={showUpdates} />;
         }}
       />
     </Box>
@@ -167,39 +176,109 @@ export default function JobCalendar({
  * boxes on each would read as "nothing happened" when in fact hundreds of
  * thousands of jobs changed state.
  */
-function TileBody({ slice }: { slice: DaySlice | undefined }) {
+/**
+ * Fixed vertical space reserved for the flow. The diagram is drawn shorter than
+ * this when the day is quiet, but the slot never shrinks -- that is what keeps the
+ * caption below it on a constant line across every tile.
+ */
+const SANKEY_SLOT = 58;
+
+const TILE_CAPTION = {
+  fontSize: "0.64rem",
+  fontWeight: 700,
+  lineHeight: 1.3,
+  textAlign: "center",
+  whiteSpace: "nowrap",
+} as const;
+
+function TileBody({
+  slice,
+  showPlaced,
+  showUpdates,
+}: {
+  slice: DaySlice | undefined;
+  showPlaced: boolean;
+  showUpdates: boolean;
+}) {
   if (!slice) return null;
 
-  if (slice.queued > 0) {
+  const placedVisible = showPlaced && slice.queued > 0;
+  // Held as a value rather than a boolean so the type predicate narrows below.
+  const flows = showUpdates && hasFlow(slice.flows) ? slice.flows : null;
+  const flowVisible = flows !== null;
+  if (!placedVisible && !flowVisible) {
+    // slice.changed is distinct jobs, not a sum of the transition lines -- a job
+    // that ran and finished today counts once here and twice in the day detail.
+    if (slice.queued === 0 && slice.changed === 0) return null;
     return (
-      <>
-        <Box sx={{ width: "100%", display: "flex", justifyContent: "center", px: "2px" }}>
-          <JobGrid counts={slice.stateAsOf} maxWidth={64} gap={1} />
-        </Box>
-        <Typography
-          component="span"
-          sx={{ fontSize: "0.7rem", fontWeight: 700, lineHeight: 1.2 }}
-        >
-          {compactNumber(slice.queued)} queued
-        </Typography>
-      </>
+      <Typography
+        component="span"
+        sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1.3, mt: "auto", mb: "auto" }}
+      >
+        {slice.queued > 0 ? (
+          <Box component="span" sx={{ fontWeight: 700, color: "text.primary" }}>
+            {compactNumber(slice.queued)} placed
+          </Box>
+        ) : (
+          <>
+            none placed
+            <Box component="span" sx={{ display: "block", fontWeight: 700, color: "text.primary" }}>
+              {compactNumber(slice.changed)} changed
+            </Box>
+          </>
+        )}
+      </Typography>
     );
   }
 
-  // slice.changed is distinct jobs, not a sum of the transition lines -- a job that
-  // ran and finished today counts once here and twice in the day detail.
-  if (slice.changed === 0) return null;
-
   return (
-    <Typography
-      component="span"
-      sx={{ fontSize: "0.7rem", color: "text.secondary", lineHeight: 1.3, mt: "auto", mb: "auto" }}
-    >
-      none queued
-      <Box component="span" sx={{ display: "block", fontWeight: 700, color: "text.primary" }}>
-        {compactNumber(slice.changed)} changed
-      </Box>
-    </Typography>
+    <>
+      {/*
+        Stacked, not side by side: flow on top, then its caption, then the waffle.
+        The flow lives in a fixed-height slot and hangs from the top of it, so its
+        log-scaled height varies while the caption underneath stays on the same line
+        in every tile -- which is what makes the heights comparable down a column.
+      */}
+      {flows && (
+        <Box
+          sx={{
+            width: "100%",
+            height: SANKEY_SLOT,
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+          }}
+        >
+          <Box sx={{ width: "100%", maxWidth: 104, minWidth: 0 }}>
+            <StateFlowSankey
+              flows={flows}
+              carry={slice.carry}
+              variant="tile"
+              height={tileFlowHeight(slice.changed, 14, SANKEY_SLOT)}
+              label={`${compactNumber(slice.changed)} jobs changed state`}
+            />
+          </Box>
+        </Box>
+      )}
+
+      {flowVisible && (
+        <Typography component="span" sx={TILE_CAPTION}>
+          {compactNumber(slice.changed)} changed
+        </Typography>
+      )}
+
+      {placedVisible && (
+        <Box sx={{ width: "100%", display: "flex", justifyContent: "center", mt: "2px" }}>
+          <JobGrid counts={slice.stateAsOf} maxWidth={56} gap={1} />
+        </Box>
+      )}
+
+      {placedVisible && (
+        <Typography component="span" sx={TILE_CAPTION}>
+          {compactNumber(slice.queued)} placed
+        </Typography>
+      )}
+    </>
   );
 }
 

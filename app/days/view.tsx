@@ -1,7 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Box, Button, MenuItem, Select, Stack, Typography } from "@mui/material";
+import {
+  Box,
+  Button,
+  MenuItem,
+  Select,
+  Stack,
+  ToggleButton,
+  ToggleButtonGroup,
+  Typography,
+} from "@mui/material";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import Link from "next/link";
 
@@ -30,6 +39,9 @@ export default function DaysView({ data }: DaysViewProps) {
 
   const [cluster, setCluster] = useState<string>(ALL_CLUSTERS);
   const [openDay, setOpenDay] = useState<string | null>(null);
+  // Which of the two per-day graphics the calendar draws. Both on by default;
+  // turning one off gives the other the full width of a tile.
+  const [views, setViews] = useState<string[]>(["placed", "updates"]);
   // Open on the month containing the as-of day: the part of the window with the
   // freshest activity.
   const [activeStartDate, setActiveStartDate] = useState<Date>(() => {
@@ -61,7 +73,7 @@ export default function DaysView({ data }: DaysViewProps) {
         </Typography>
         <Typography variant="body1" sx={{ color: "text.secondary" }}>
           {data.counted.toLocaleString()} jobs across {data.clusters.length} clusters,{" "}
-          {clusterLabel}. Every day shows the jobs queued that day, coloured by where they
+          {clusterLabel}. Every day shows the jobs placed that day, coloured by where they
           stand as of {formatDayShort(asOf)}. Click a day for its full breakdown.
         </Typography>
       </Stack>
@@ -118,6 +130,30 @@ export default function DaysView({ data }: DaysViewProps) {
               Cluster {cluster} detail
             </Button>
           )}
+
+          <Box sx={{ ml: { sm: "auto" } }}>
+            <Typography
+              variant="overline"
+              component="p"
+              sx={{ color: "text.secondary", display: "block", lineHeight: 1.6 }}
+            >
+              Show in calendar
+            </Typography>
+            <ToggleButtonGroup
+              size="small"
+              value={views}
+              onChange={(_, next: string[]) => setViews(next)}
+              aria-label="Which graphics to draw on each day"
+              sx={{ mt: 0.5 }}
+            >
+              <ToggleButton value="placed" aria-label="Show jobs placed each day">
+                Placed
+              </ToggleButton>
+              <ToggleButton value="updates" aria-label="Show state changes each day">
+                Updates
+              </ToggleButton>
+            </ToggleButtonGroup>
+          </Box>
         </Stack>
 
         <MonthSummary
@@ -134,6 +170,8 @@ export default function DaysView({ data }: DaysViewProps) {
           activeStartDate={activeStartDate}
           onActiveStartDateChange={setActiveStartDate}
           onSelectDay={setOpenDay}
+          showPlaced={views.includes("placed")}
+          showUpdates={views.includes("updates")}
         />
       </Stack>
 

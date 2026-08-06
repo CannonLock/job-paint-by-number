@@ -1,10 +1,11 @@
 "use client";
 
-import { Box, Button, Paper, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Paper, Stack, Typography } from "@mui/material";
 
 import type { DaySlice } from "../types";
 import { ActivityRows } from "./StateRows";
-import { formatDayLong } from "./dayModel";
+import StateFlowSankey from "./StateFlowSankey";
+import { formatDayLong, hasFlow } from "./dayModel";
 
 interface YesterdayCardProps {
   slice: DaySlice | null;
@@ -73,6 +74,26 @@ export default function YesterdayCard({ slice, onOpenDetail }: YesterdayCardProp
             )}
           </Box>
         </Box>
+
+        {/* Full variant: nodes labelled, counts on hover. This is the one place the
+            flow gets enough room to be read rather than just glanced at. */}
+        {slice && changed > 0 && (
+          <Box sx={{ flex: 1, minWidth: { xs: "100%", sm: 320 }, width: "100%" }}>
+            {hasFlow(slice.flows) ? (
+              <StateFlowSankey
+                flows={slice.flows}
+                carry={slice.carry}
+                variant="full"
+                height={170}
+                label={`State changes on ${formatDayLong(slice.day)}`}
+              />
+            ) : (
+              <Alert severity="info" sx={{ py: 0.5 }}>
+                Flow data needs a rebuild — run <code>node scripts/build-day-data.mjs</code>.
+              </Alert>
+            )}
+          </Box>
+        )}
 
         {slice && (
           <Button variant="outlined" size="small" onClick={onOpenDetail} sx={{ flexShrink: 0 }}>

@@ -67,7 +67,7 @@ export function CohortStateRows({
   );
 }
 
-/** What changed state on a given day, across all jobs whenever they were queued. */
+/** What changed state on a given day, across all jobs whenever they were placed. */
 export function ActivityRows({
   started,
   completed,
@@ -79,7 +79,7 @@ export function ActivityRows({
 }) {
   return (
     <Stack spacing={0.25}>
-      <StateRow state="running" value={started} verb="jobs started running" />
+      <StateRow state="running" value={started} verb="jobs became active" />
       <StateRow state="completed" value={completed} verb="jobs completed" />
       <StateRow state="removed" value={removed} verb="jobs got removed" />
     </Stack>

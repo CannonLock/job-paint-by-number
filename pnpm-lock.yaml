@@ -38,6 +38,9 @@ importers:
       chart.js:
         specifier: ^4.5.1
         version: 4.5.1
+      chartjs-chart-sankey:
+        specifier: ^0.15.0
+        version: 0.15.0(chart.js@4.5.1)
       next:
         specifier: ^16.1.5
         version: 16.1.5(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -1176,6 +1179,11 @@ packages:
     peerDependencies:
       chart.js: '>=3.0.0'
       luxon: '>=1.0.0'
+
+  chartjs-chart-sankey@0.15.0:
+    resolution: {integrity: sha512-NU0RHKPcUr6iXco2UvzXPA+z0TK/I11m1Pgy+6GqwdrmaGEiD3WQeNFF8NDxyJPkTFYQ/9kKijPQzuHBit41Dg==}
+    peerDependencies:
+      chart.js: '>=3.3.0'
 
   client-only@0.0.1:
     resolution: {integrity: sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA==}
@@ -3577,6 +3585,10 @@ snapshots:
     dependencies:
       chart.js: 4.5.1
       luxon: 3.7.2
+
+  chartjs-chart-sankey@0.15.0(chart.js@4.5.1):
+    dependencies:
+      chart.js: 4.5.1
 
   client-only@0.0.1: {}
 

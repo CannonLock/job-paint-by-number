@@ -66,7 +66,7 @@ export function buildCells(counts: StateCounts | null): (JobState | null)[] {
 
 /** "1 box = 1 job" / "1 box = 15,061 jobs" */
 export function boxScaleLabel(total: number): string {
-  if (total === 0) return "No jobs queued";
+  if (total === 0) return "No jobs placed";
   const per = jobsPerBox(total);
   return per === 1 ? "1 box = 1 job" : `1 box = ${per.toLocaleString()} jobs`;
 }

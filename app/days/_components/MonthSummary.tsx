@@ -12,7 +12,7 @@ interface MonthSummaryProps {
 }
 
 /**
- * Breakdown of the jobs queued during the displayed month, and where they stand
+ * Breakdown of the jobs placed during the displayed month, and where they stand
  * today. Sits above the calendar and doubles as its legend -- four states on
  * screen means a legend is not optional, and pairing each colour with its count
  * here keeps colour from being the only carrier of meaning.
@@ -33,7 +33,7 @@ export default function MonthSummary({ rollup, monthLabel, asOfLabel }: MonthSum
             component="h2"
             sx={{ color: "text.secondary", lineHeight: 1.6, display: "block" }}
           >
-            Queued in {monthLabel}
+            Placed in {monthLabel}
           </Typography>
           <Typography variant="h4" component="p" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
             {queued.toLocaleString()}
