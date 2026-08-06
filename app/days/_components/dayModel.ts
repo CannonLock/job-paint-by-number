@@ -5,9 +5,16 @@
 // on purpose -- the demo data is a snapshot, and a page that asked the browser for
 // today's date would start showing empty days the morning after it was baked.
 
-import type { DayData, DayFlows, DaySlice, StateCounts } from "../types";
+import type { DayCarry, DayData, DayFlows, DaySlice, StateCounts } from "../types";
 
 export const ALL_CLUSTERS = "all";
+
+/**
+ * Sentinel day key the bake uses for the census taken as the window opens, so the
+ * first real day has a measured carry-in rather than a guess. Must match
+ * WINDOW_START_DAY in scripts/build-day-data.mjs.
+ */
+export const WINDOW_START_DAY = "window-start";
 
 const ZERO: StateCounts = [0, 0, 0, 0];
 
@@ -115,25 +122,22 @@ export function buildSliceMap(data: DayData, cluster: string): Map<string, DaySl
     endOfDay.set(row.day, entry);
   }
 
-  // Turn the census into per-day carry-in/carry-out. Day 0 inherits from before the
-  // window, which the census cannot see, so its carry-in is whatever the day's own
-  // flows imply rather than a measured value.
+  // Turn the census into per-day carry-in/carry-out. Day 0 reads its carry-in from
+  // the window-start census -- the state measured at the instant the window opened.
+  // Inferring it from the day's own flows instead understated the opening backlog
+  // badly (345,341 against a measured ~708,716), which then propagated into every
+  // period that began on day 0.
   if (data.carry) {
+    const beforeWindow = endOfDay.get(WINDOW_START_DAY) ?? { placed: 0, active: 0 };
     data.days.forEach((day, index) => {
       const slice = slices.get(day);
       if (!slice) return;
       const today = endOfDay.get(day) ?? { placed: 0, active: 0 };
-      const yesterday = index > 0 ? endOfDay.get(data.days[index - 1]) : undefined;
-      const flows = slice.flows;
-
-      const impliedPlacedIn = flows
-        ? flows.placedBeforeToActive + flows.placedBeforeToRemoved + flows.placedBeforeToCompleted
-        : 0;
-      const impliedActiveIn = flows ? flows.activeToCompleted + flows.activeToRemoved : 0;
+      const yesterday = index > 0 ? (endOfDay.get(data.days[index - 1]) ?? today) : beforeWindow;
 
       slice.carry = {
-        placedIn: yesterday ? yesterday.placed : impliedPlacedIn,
-        activeIn: yesterday ? yesterday.active : impliedActiveIn,
+        placedIn: yesterday.placed,
+        activeIn: yesterday.active,
         placedOut: today.placed,
         activeOut: today.active,
         placedNew: slice.queued,
@@ -174,6 +178,105 @@ export function monthRollup(
   }
 
   return { queued, stateAsOf, daysWithData };
+}
+
+export type PeriodKey = "yesterday" | "week" | "month";
+
+export const PERIOD_OPTIONS: { key: PeriodKey; label: string; days: number }[] = [
+  { key: "yesterday", label: "Yesterday", days: 1 },
+  { key: "week", label: "Last Week", days: 7 },
+  { key: "month", label: "Last Month", days: 30 },
+];
+
+export interface PeriodSummary {
+  key: PeriodKey;
+  label: string;
+  /** Days actually covered, ascending. */
+  days: string[];
+  flows: DayFlows | null;
+  carry: DayCarry | null;
+  started: number;
+  completed: number;
+  removed: number;
+  /**
+   * Distinct jobs that moved. Only meaningful for a single day: per-day distinct
+   * counts cannot be summed without double-counting a job that moved on two days,
+   * so multi-day periods leave this null and report transitions instead.
+   */
+  distinctChanged: number | null;
+  /** Total transitions in the period; a job may contribute more than one. */
+  transitions: number;
+  placedNew: number;
+  /** True when the requested length ran off the front of the baked window. */
+  truncated: boolean;
+}
+
+/**
+ * Roll a trailing period up into one summary, ending at the last complete day
+ * (the day before the as-of day).
+ *
+ * Transitions are additive across days, so they sum directly. Carry-over is not:
+ * it is read from the census at the period's two edges, giving what the period
+ * inherited and what it hands on, rather than summing intermediate days that
+ * cancel out internally.
+ */
+export function buildPeriodSummary(
+  data: DayData,
+  slices: Map<string, DaySlice>,
+  key: PeriodKey,
+): PeriodSummary | null {
+  const option = PERIOD_OPTIONS.find((o) => o.key === key) ?? PERIOD_OPTIONS[0];
+  // The as-of day is partial, so periods end on the last complete day before it.
+  const endIndex = data.days.length - 2;
+  if (endIndex < 0) return null;
+
+  const wantedStart = endIndex - (option.days - 1);
+  const startIndex = Math.max(0, wantedStart);
+  const days = data.days.slice(startIndex, endIndex + 1);
+
+  let flows: DayFlows | null = null;
+  let started = 0;
+  let completed = 0;
+  let removed = 0;
+  let placedNew = 0;
+  for (const day of days) {
+    const slice = slices.get(day);
+    if (!slice) continue;
+    if (slice.flows) flows = addFlows(flows, slice.flows);
+    started += slice.started;
+    completed += slice.completed;
+    removed += slice.removed;
+    placedNew += slice.queued;
+  }
+
+  const first = slices.get(days[0]);
+  const last = slices.get(days[days.length - 1]);
+  const carry: DayCarry | null =
+    first?.carry && last?.carry
+      ? {
+          placedIn: first.carry.placedIn,
+          activeIn: first.carry.activeIn,
+          placedOut: last.carry.placedOut,
+          activeOut: last.carry.activeOut,
+          placedNew,
+        }
+      : null;
+
+  const single = days.length === 1;
+  return {
+    key,
+    label: option.label,
+    days,
+    flows,
+    carry,
+    started,
+    completed,
+    removed,
+    distinctChanged: single ? (slices.get(days[0])?.changed ?? 0) : null,
+    transitions: started + completed + removed,
+    placedNew,
+    truncated: wantedStart < 0,
+  };
 }
 
 /** True when the day carries nothing at all -- no cohort and no transitions. */

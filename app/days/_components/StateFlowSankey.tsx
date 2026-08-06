@@ -21,6 +21,8 @@ Chart.register(SankeyController, Flow, LinearScale, Tooltip);
 const NODE = {
   placedToday: "placedToday",
   placedBefore: "placedBefore",
+  /** Period mode only: the queue itself, fed by both placed sources. */
+  placedPool: "placedPool",
   activeBefore: "activeBefore",
   active: "active",
   completed: "completed",
@@ -32,6 +34,7 @@ const NODE = {
 const NODE_NAMES: Record<string, string> = {
   [NODE.placedToday]: "Placed Today",
   [NODE.placedBefore]: "Placed Before",
+  [NODE.placedPool]: "In Queue",
   [NODE.activeBefore]: "Active Before",
   [NODE.active]: STATE_STYLES.running.label,
   [NODE.completed]: STATE_STYLES.completed.label,
@@ -82,24 +85,52 @@ function nodeTotals(edges: { from: string; to: string; flow: number }[]): Record
  */
 const PLACED_BEFORE_COLOR = "#a8791f";
 
+/**
+ * Work that was already running when the day opened, and still running when it
+ * closed: the Active indigo lightened so carried state is distinguishable from work
+ * that actually moved.
+ *
+ * Validated with the other five at --pairs all: all gates PASS, worst CVD 11.6 and
+ * worst normal-vision 16.3 (both the ochre/red and ochre/amber pairs, unchanged by
+ * this addition). Darkening indigo instead was tried first and failed -- #5a6ba8
+ * measures only 10.2 against #3b5bdb for normal vision, and #7d84c4 collides with
+ * the teal. Lightening turned out to be the direction with room in it.
+ */
+const CARRIED_ACTIVE_COLOR = "#8ea3e8";
+
 const NODE_COLORS: Record<string, string> = {
   [NODE.placedToday]: STATE_STYLES.queued.color,
   [NODE.placedBefore]: PLACED_BEFORE_COLOR,
-  [NODE.activeBefore]: STATE_STYLES.running.color,
+  [NODE.placedPool]: STATE_STYLES.queued.color,
+  [NODE.activeBefore]: CARRIED_ACTIVE_COLOR,
   [NODE.active]: STATE_STYLES.running.color,
   [NODE.completed]: STATE_STYLES.completed.color,
   [NODE.removed]: STATE_STYLES.removed.color,
-  // Carry-out keeps its state's colour: what is still placed at midnight is the
-  // stale backlog tomorrow inherits, so it takes the aged ochre.
+  // Carry-out keeps the carried colour of its state: what is still placed at
+  // midnight is the stale backlog tomorrow inherits as "Placed Before".
   [NODE.stillPlaced]: PLACED_BEFORE_COLOR,
-  [NODE.stillActive]: STATE_STYLES.running.color,
+  [NODE.stillActive]: CARRIED_ACTIVE_COLOR,
 };
+
+/**
+ * Colour key for the flow. Carried states are listed explicitly because they have
+ * no equivalent in the waffle's four-state palette and would otherwise be unlabelled
+ * colours on the page.
+ */
+export const FLOW_LEGEND: { label: string; color: string }[] = [
+  { label: "Placed that day", color: STATE_STYLES.queued.color },
+  { label: "Placed earlier", color: PLACED_BEFORE_COLOR },
+  { label: "Already active", color: CARRIED_ACTIVE_COLOR },
+  { label: "Became active", color: STATE_STYLES.running.color },
+  { label: STATE_STYLES.completed.label, color: STATE_STYLES.completed.color },
+  { label: STATE_STYLES.removed.label, color: STATE_STYLES.removed.color },
+];
 
 /**
  * Column index per node. Pinning these stops the layout from reshuffling ranks
  * between days, which would make the small multiples in the calendar unreadable.
  */
-const NODE_COLUMNS: Record<string, number> = {
+const DAY_COLUMNS: Record<string, number> = {
   [NODE.placedToday]: 0,
   [NODE.placedBefore]: 0,
   [NODE.activeBefore]: 0,
@@ -108,6 +139,19 @@ const NODE_COLUMNS: Record<string, number> = {
   [NODE.removed]: 2,
   [NODE.stillPlaced]: 2,
   [NODE.stillActive]: 2,
+};
+
+/** Period mode adds the queue-pool rank, so everything downstream shifts right. */
+const PERIOD_COLUMNS: Record<string, number> = {
+  [NODE.placedToday]: 0,
+  [NODE.placedBefore]: 0,
+  [NODE.placedPool]: 1,
+  [NODE.activeBefore]: 1,
+  [NODE.active]: 2,
+  [NODE.completed]: 3,
+  [NODE.removed]: 3,
+  [NODE.stillPlaced]: 3,
+  [NODE.stillActive]: 3,
 };
 
 /** Measured transition edges. Zero-weight edges are dropped before render. */
@@ -124,17 +168,21 @@ const TRANSITION_EDGES: { from: string; to: string; key: keyof DayFlows }[] = [
 
 const clampPositive = (n: number) => (Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
 
+type Edge = { from: string; to: string; flow: number };
+
+const pushIf = (edges: Edge[], from: string, to: string, flow: number) => {
+  if (flow > 0) edges.push({ from, to, flow });
+};
+
 /**
- * Build the full edge list: measured transitions, plus the carry-over edges that
- * make the day balance.
+ * Edges for one day.
  *
- * Carry-out is a residual — what came into a rank minus what left it by a measured
- * transition. It is computed rather than read from the census so the ribbons always
- * sum correctly even if the two were built from slightly different job populations;
- * a negative residual would mean the inputs disagree, and is clamped to zero rather
- * than drawn as an impossible flow.
+ * Same-day attribution is known here — a transition on this day either belongs to a
+ * job placed this day or to one placed earlier — so the two placed sources keep
+ * their own ribbons. Carry-out is taken from the measured census rather than
+ * inferred, with only the split between the two sources derived.
  */
-function buildEdges(flows: DayFlows, carry: DayCarry | null) {
+function buildDayEdges(flows: DayFlows, carry: DayCarry | null): Edge[] {
   const edges = TRANSITION_EDGES.filter((edge) => flows[edge.key] > 0).map((edge) => ({
     from: edge.from,
     to: edge.to,
@@ -142,56 +190,105 @@ function buildEdges(flows: DayFlows, carry: DayCarry | null) {
   }));
   if (!carry) return edges;
 
-  // Jobs already running when the day began, flowing into Active.
-  if (carry.activeIn > 0) {
-    edges.push({ from: NODE.activeBefore, to: NODE.active, flow: carry.activeIn });
-  }
+  pushIf(edges, NODE.activeBefore, NODE.active, carry.activeIn);
 
-  // Placed work that neither started nor left the queue today.
+  // Of the jobs placed today, those that did not move are still placed tonight.
   const todayLeft =
     flows.placedTodayToActive + flows.placedTodayToRemoved + flows.placedTodayToCompleted;
-  const todayStays = clampPositive(carry.placedNew - todayLeft);
-  if (todayStays > 0) {
-    edges.push({ from: NODE.placedToday, to: NODE.stillPlaced, flow: todayStays });
-  }
+  const todayStays = Math.min(clampPositive(carry.placedNew - todayLeft), carry.placedOut);
+  pushIf(edges, NODE.placedToday, NODE.stillPlaced, todayStays);
+  // The rest of tonight's queue is older work, taken as the measured remainder.
+  pushIf(edges, NODE.placedBefore, NODE.stillPlaced, clampPositive(carry.placedOut - todayStays));
 
-  const backlogLeft =
-    flows.placedBeforeToActive + flows.placedBeforeToRemoved + flows.placedBeforeToCompleted;
-  const backlogStays = clampPositive(carry.placedIn - backlogLeft);
-  if (backlogStays > 0) {
-    edges.push({ from: NODE.placedBefore, to: NODE.stillPlaced, flow: backlogStays });
-  }
+  pushIf(edges, NODE.active, NODE.stillActive, carry.activeOut);
+  return edges;
+}
 
-  // Still executing at midnight: everything that entered Active, less what finished.
-  const activeIn = carry.activeIn + flows.placedTodayToActive + flows.placedBeforeToActive;
-  const activeStays = clampPositive(activeIn - (flows.activeToCompleted + flows.activeToRemoved));
-  if (activeStays > 0) {
-    edges.push({ from: NODE.active, to: NODE.stillActive, flow: activeStays });
-  }
+/**
+ * Edges for a multi-day period.
+ *
+ * Over several days the same-day split stops being attributable: a job placed on the
+ * 24th that starts on the 1st is "placed before" on the day it moved, yet it was
+ * placed inside the period. Deriving carry-out from same-day transitions therefore
+ * strands every such job in Still Placed — which is what put ~1.5M phantom jobs
+ * there over a month while a week whose jobs all resolved same-day looked fine.
+ *
+ * So the period model routes both sources into the queue itself and drains that
+ * pool using period totals and the measured census at each edge. Nothing is
+ * apportioned between the two sources beyond what was actually measured.
+ */
+function buildPeriodEdges(flows: DayFlows, carry: DayCarry | null): Edge[] {
+  if (!carry) return buildDayEdges(flows, null);
+  const edges: Edge[] = [];
+
+  // Two ways into the queue: the backlog the period opened with, and new work.
+  pushIf(edges, NODE.placedBefore, NODE.placedPool, carry.placedIn);
+  pushIf(edges, NODE.placedToday, NODE.placedPool, carry.placedNew);
+
+  // Four ways out, all measured over the period.
+  pushIf(
+    edges,
+    NODE.placedPool,
+    NODE.active,
+    flows.placedTodayToActive + flows.placedBeforeToActive,
+  );
+  pushIf(
+    edges,
+    NODE.placedPool,
+    NODE.removed,
+    flows.placedTodayToRemoved + flows.placedBeforeToRemoved,
+  );
+  pushIf(
+    edges,
+    NODE.placedPool,
+    NODE.completed,
+    flows.placedTodayToCompleted + flows.placedBeforeToCompleted,
+  );
+  pushIf(edges, NODE.placedPool, NODE.stillPlaced, carry.placedOut);
+
+  pushIf(edges, NODE.activeBefore, NODE.active, carry.activeIn);
+  pushIf(edges, NODE.active, NODE.completed, flows.activeToCompleted);
+  pushIf(edges, NODE.active, NODE.removed, flows.activeToRemoved);
+  pushIf(edges, NODE.active, NODE.stillActive, carry.activeOut);
 
   return edges;
 }
 
-/** Job counts spanning a single job to a million; the tile scale covers that range. */
-const VOLUME_DECADES = 6;
-
 /**
- * Rendered height for a tile Sankey, log-scaled by how many jobs moved that day.
+ * Rendered height for a tile Sankey, log-scaled against the busiest day on screen.
  *
  * A Sankey always normalises to fill its canvas, so a 500-job day and a 900,000-job
  * day draw identically — the diagram says how work was distributed but nothing
- * about how much there was. Scaling the whole diagram by log10 of the day's volume
- * restores that: across a month, busy days are visibly taller than quiet ones,
- * and the log keeps four orders of magnitude inside a few dozen pixels.
+ * about how much there was. Scaling the canvas restores that.
+ *
+ * The scale is relative rather than absolute: the peak day renders at full height
+ * and everything else in proportion, so each page uses its whole vertical range
+ * instead of a quiet month collapsing into stubs. The trade-off is that heights are
+ * only comparable within a page — navigating months rescales.
  *
  * Deliberately applied to the canvas, not to the flow values. Log-transforming the
  * individual flows would make the ribbons within one day lie about their relative
- * sizes — a 10:1 split would draw as roughly 1.5:1. Proportions inside a day stay
- * linear and truthful; only the overall size carries the cross-day signal.
+ * sizes — a genuine 10:1 split would draw as roughly 1.5:1. Proportions inside a
+ * day stay linear and truthful; only the overall size carries the cross-day signal.
  */
-export function tileFlowHeight(jobsMoved: number, min: number, max: number): number {
-  const magnitude = Math.log10(Math.max(jobsMoved, 1));
-  const fraction = Math.min(magnitude / VOLUME_DECADES, 1);
+export function relativeFlowHeight(
+  jobsMoved: number,
+  quietestJobsMoved: number,
+  busiestJobsMoved: number,
+  min: number,
+  max: number,
+): number {
+  if (jobsMoved <= 0) return min;
+
+  // Anchored at both ends, so the quietest day on the page renders at `min` and the
+  // busiest at `max`. Measuring from zero instead wastes most of the range: with a
+  // 66-job day against an 859,104-job peak, log10(67)/log10(859105) is already 0.31,
+  // so the "shortest" diagram came out a third of the way up regardless of the floor.
+  const lo = Math.log10(Math.max(Math.min(quietestJobsMoved, jobsMoved), 1) + 1);
+  const hi = Math.log10(Math.max(busiestJobsMoved, jobsMoved) + 1);
+  const here = Math.log10(jobsMoved + 1);
+  const span = hi - lo;
+  const fraction = span > 0 ? Math.min(Math.max((here - lo) / span, 0), 1) : 1;
   return Math.round(min + fraction * (max - min));
 }
 
@@ -208,6 +305,12 @@ interface StateFlowSankeyProps {
    * "full" labels the nodes and shows counts on hover.
    */
   variant?: "tile" | "full";
+  /**
+   * Rename the source nodes for a multi-day period, where "today" is no longer a
+   * single day: the split is between jobs placed on the day they moved and jobs
+   * placed before it.
+   */
+  sameDayLabels?: boolean;
   height?: number;
   /** Accessible description; the canvas itself is opaque to a screen reader. */
   label: string;
@@ -224,6 +327,7 @@ export default function StateFlowSankey({
   flows,
   carry = null,
   variant = "full",
+  sameDayLabels = false,
   height = 160,
   label,
 }: StateFlowSankeyProps) {
@@ -234,7 +338,9 @@ export default function StateFlowSankey({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const data = buildEdges(flows, carry);
+    // Period mode routes both placed sources through the queue pool; a single
+    // day keeps its directly-attributable split.
+    const data = sameDayLabels ? buildPeriodEdges(flows, carry) : buildDayEdges(flows, carry);
     if (data.length === 0) return;
 
     const isTile = variant === "tile";
@@ -243,10 +349,17 @@ export default function StateFlowSankey({
     // day actually uses get a label, so an unused rank stays blank rather than
     // printing a zero.
     const totals = nodeTotals(data);
+    const names = sameDayLabels
+      ? {
+          ...NODE_NAMES,
+          [NODE.placedToday]: "Placed In Period",
+          [NODE.placedBefore]: "Placed At Start",
+        }
+      : NODE_NAMES;
     const labels = isTile
       ? BLANK_LABELS
       : Object.fromEntries(
-          Object.entries(NODE_NAMES).map(([key, name]) => [
+          Object.entries(names).map(([key, name]) => [
             key,
             totals[key] > 0 ? `${name}  ${totals[key].toLocaleString()}` : "",
           ]),
@@ -263,7 +376,7 @@ export default function StateFlowSankey({
             colorTo: (ctx: { raw?: { to?: string } }) => NODE_COLORS[ctx.raw?.to ?? ""] ?? "#999",
             colorMode: "gradient",
             labels,
-            column: NODE_COLUMNS,
+            column: sameDayLabels ? PERIOD_COLUMNS : DAY_COLUMNS,
             // Tiles are ~56px wide; a normal node bar and padding would leave no
             // room for the ribbons themselves.
             size: "max",
@@ -305,7 +418,7 @@ export default function StateFlowSankey({
       chartRef.current?.destroy();
       chartRef.current = null;
     };
-  }, [flows, carry, variant]);
+  }, [flows, carry, variant, sameDayLabels]);
 
   return (
     <Box

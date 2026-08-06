@@ -18,15 +18,16 @@ import type { DayData } from "./types";
 import DayDialog from "./_components/DayDialog";
 import JobCalendar from "./_components/JobCalendar";
 import MonthSummary from "./_components/MonthSummary";
-import YesterdayCard from "./_components/YesterdayCard";
+import PeriodCard from "./_components/YesterdayCard";
 import {
   ALL_CLUSTERS,
   asOfDay,
+  buildPeriodSummary,
   buildSliceMap,
   formatDayShort,
   monthRollup,
   parseDayKey,
-  previousDay,
+  type PeriodKey,
 } from "./_components/dayModel";
 
 interface DaysViewProps {
@@ -35,13 +36,13 @@ interface DaysViewProps {
 
 export default function DaysView({ data }: DaysViewProps) {
   const asOf = asOfDay(data);
-  const yesterday = previousDay(data);
 
   const [cluster, setCluster] = useState<string>(ALL_CLUSTERS);
   const [openDay, setOpenDay] = useState<string | null>(null);
   // Which of the two per-day graphics the calendar draws. Both on by default;
   // turning one off gives the other the full width of a tile.
   const [views, setViews] = useState<string[]>(["placed", "updates"]);
+  const [period, setPeriod] = useState<PeriodKey>("yesterday");
   // Open on the month containing the as-of day: the part of the window with the
   // freshest activity.
   const [activeStartDate, setActiveStartDate] = useState<Date>(() => {
@@ -50,6 +51,11 @@ export default function DaysView({ data }: DaysViewProps) {
   });
 
   const slices = useMemo(() => buildSliceMap(data, cluster), [data, cluster]);
+
+  const summary = useMemo(
+    () => buildPeriodSummary(data, slices, period),
+    [data, slices, period],
+  );
 
   const rollup = useMemo(
     () => monthRollup(slices, activeStartDate.getFullYear(), activeStartDate.getMonth()),
@@ -79,9 +85,11 @@ export default function DaysView({ data }: DaysViewProps) {
       </Stack>
 
       <Stack spacing={3}>
-        <YesterdayCard
-          slice={yesterday ? (slices.get(yesterday) ?? null) : null}
-          onOpenDetail={() => yesterday && setOpenDay(yesterday)}
+        <PeriodCard
+          summary={summary}
+          period={period}
+          onPeriodChange={setPeriod}
+          onOpenDetail={() => summary?.days.length === 1 && setOpenDay(summary.days[0])}
         />
 
         <Stack

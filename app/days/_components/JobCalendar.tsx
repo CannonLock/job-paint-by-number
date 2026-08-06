@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { Box, Typography } from "@mui/material";
 import Calendar from "react-calendar";
 
@@ -7,7 +8,7 @@ import "react-calendar/dist/Calendar.css";
 
 import type { DaySlice } from "../types";
 import JobGrid from "./JobGrid";
-import StateFlowSankey, { tileFlowHeight } from "./StateFlowSankey";
+import StateFlowSankey, { relativeFlowHeight } from "./StateFlowSankey";
 import {
   asOfDay,
   compactNumber,
@@ -55,6 +56,27 @@ export default function JobCalendar({
 }: JobCalendarProps) {
   const minDate = parseDayKey(firstDay);
   const maxDate = parseDayKey(lastDay);
+
+  // Busiest day in the month on screen. Tile heights are scaled against this, so
+  // one diagram always fills its slot and the rest read in proportion to it --
+  // otherwise a quiet month would draw every day as an identical stub.
+  const { peakChanged, quietestChanged } = useMemo(() => {
+    let peak = 0;
+    let quietest = Infinity;
+    for (const slice of slices.values()) {
+      const date = parseDayKey(slice.day);
+      if (
+        date.getFullYear() !== activeStartDate.getFullYear() ||
+        date.getMonth() !== activeStartDate.getMonth() ||
+        slice.changed <= 0
+      ) {
+        continue;
+      }
+      if (slice.changed > peak) peak = slice.changed;
+      if (slice.changed < quietest) quietest = slice.changed;
+    }
+    return { peakChanged: peak, quietestChanged: Number.isFinite(quietest) ? quietest : 0 };
+  }, [slices, activeStartDate]);
 
   return (
     <Box
@@ -107,7 +129,7 @@ export default function JobCalendar({
           gap: "4px",
           // Tall enough for the stack: flow slot, its caption, the waffle, its
           // caption. Content is top-aligned so every tile's rows line up.
-          minHeight: { xs: 150, sm: 186 },
+          minHeight: { xs: 180, sm: 216 },
           padding: "6px 4px",
           border: "1px solid",
           borderColor: "divider",
@@ -160,7 +182,15 @@ export default function JobCalendar({
         tileContent={({ date, view }) => {
           if (view !== "month") return null;
           const slice = slices.get(dayKeyOf(date));
-          return <TileBody slice={slice} showPlaced={showPlaced} showUpdates={showUpdates} />;
+          return (
+            <TileBody
+              slice={slice}
+              showPlaced={showPlaced}
+              showUpdates={showUpdates}
+              peakChanged={peakChanged}
+              quietestChanged={quietestChanged}
+            />
+          );
         }}
       />
     </Box>
@@ -181,7 +211,14 @@ export default function JobCalendar({
  * this when the day is quiet, but the slot never shrinks -- that is what keeps the
  * caption below it on a constant line across every tile.
  */
-const SANKEY_SLOT = 58;
+const SANKEY_SLOT = 88;
+
+/**
+ * Height the quietest day on the page renders at. Low enough that the log scale has
+ * real range against the 88px peak, but tall enough that the diagram still reads as
+ * three ranks of ribbons rather than a smudge.
+ */
+const SANKEY_MIN = 20;
 
 const TILE_CAPTION = {
   fontSize: "0.64rem",
@@ -195,10 +232,16 @@ function TileBody({
   slice,
   showPlaced,
   showUpdates,
+  peakChanged,
+  quietestChanged,
 }: {
   slice: DaySlice | undefined;
   showPlaced: boolean;
   showUpdates: boolean;
+  /** Busiest day currently on screen; anchors the top of the tile scale. */
+  peakChanged: number;
+  /** Quietest non-empty day on screen; anchors the bottom. */
+  quietestChanged: number;
 }) {
   if (!slice) return null;
 
@@ -254,7 +297,13 @@ function TileBody({
               flows={flows}
               carry={slice.carry}
               variant="tile"
-              height={tileFlowHeight(slice.changed, 14, SANKEY_SLOT)}
+              height={relativeFlowHeight(
+                slice.changed,
+                quietestChanged,
+                peakChanged,
+                SANKEY_MIN,
+                SANKEY_SLOT,
+              )}
               label={`${compactNumber(slice.changed)} jobs changed state`}
             />
           </Box>
