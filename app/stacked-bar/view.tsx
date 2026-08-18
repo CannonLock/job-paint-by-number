@@ -1,15 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  Box,
-  MenuItem,
-  Select,
-  Stack,
-  ToggleButton,
-  ToggleButtonGroup,
-  Typography,
-} from "@mui/material";
+import { Box, MenuItem, Select, Stack, Typography } from "@mui/material";
 
 import type { StackedBarData } from "./types";
 import DayDialog from "./_components/DayDialog";
@@ -42,9 +34,6 @@ export default function StackedBarView({ data, dayData }: StackedBarViewProps) {
   const [cluster, setCluster] = useState<string>(ALL_CLUSTERS);
   const [openDay, setOpenDay] = useState<string | null>(null);
   const [period, setPeriod] = useState<PeriodKey>("yesterday");
-  // Whether the calendar tiles draw their bars; there is no placed waffle on
-  // this page's calendar.
-  const [views, setViews] = useState<string[]>(["updates"]);
   const asOf = asOfDay(dayData);
   // Open on the month containing the as-of day: the freshest part of the window.
   const [activeStartDate, setActiveStartDate] = useState<Date>(() => {
@@ -117,57 +106,30 @@ export default function StackedBarView({ data, dayData }: StackedBarViewProps) {
           onOpenDetail={setOpenDay}
         />
 
-        <Stack
-          direction={{ xs: "column", sm: "row" }}
-          spacing={2}
-          alignItems={{ xs: "stretch", sm: "flex-end" }}
-        >
-          <Box>
-            <Typography
-              variant="overline"
-              component="label"
-              htmlFor="stacked-cluster-select"
-              sx={{ color: "text.secondary", display: "block", lineHeight: 1.6 }}
-            >
-              Cluster
-            </Typography>
-            <Select
-              id="stacked-cluster-select"
-              size="small"
-              value={cluster}
-              onChange={(event) => selectCluster(String(event.target.value))}
-              sx={{ mt: 0.5, minWidth: 260 }}
-            >
-              <MenuItem value={ALL_CLUSTERS}>All clusters ({data.series.length})</MenuItem>
-              {data.series.map((s) => (
-                <MenuItem key={s.cluster} value={String(s.cluster)}>
-                  Cluster {s.cluster} · {s.total.toLocaleString()} jobs
-                </MenuItem>
-              ))}
-            </Select>
-          </Box>
-
-          <Box sx={{ ml: { sm: "auto" } }}>
-            <Typography
-              variant="overline"
-              component="p"
-              sx={{ color: "text.secondary", display: "block", lineHeight: 1.6 }}
-            >
-              Show in calendar
-            </Typography>
-            <ToggleButtonGroup
-              size="small"
-              value={views}
-              onChange={(_, next: string[]) => setViews(next)}
-              aria-label="Which graphics to draw on each day"
-              sx={{ mt: 0.5 }}
-            >
-              <ToggleButton value="updates" aria-label="Show state changes each day">
-                Updates
-              </ToggleButton>
-            </ToggleButtonGroup>
-          </Box>
-        </Stack>
+        <Box>
+          <Typography
+            variant="overline"
+            component="label"
+            htmlFor="stacked-cluster-select"
+            sx={{ color: "text.secondary", display: "block", lineHeight: 1.6 }}
+          >
+            Cluster
+          </Typography>
+          <Select
+            id="stacked-cluster-select"
+            size="small"
+            value={cluster}
+            onChange={(event) => selectCluster(String(event.target.value))}
+            sx={{ mt: 0.5, minWidth: 260 }}
+          >
+            <MenuItem value={ALL_CLUSTERS}>All clusters ({data.series.length})</MenuItem>
+            {data.series.map((s) => (
+              <MenuItem key={s.cluster} value={String(s.cluster)}>
+                Cluster {s.cluster} · {s.total.toLocaleString()} jobs
+              </MenuItem>
+            ))}
+          </Select>
+        </Box>
 
         <JobCalendar
           slices={slices}
@@ -179,7 +141,6 @@ export default function StackedBarView({ data, dayData }: StackedBarViewProps) {
           activeStartDate={activeStartDate}
           onActiveStartDateChange={setActiveStartDate}
           onSelectDay={setOpenDay}
-          showUpdates={views.includes("updates")}
         />
       </Stack>
 

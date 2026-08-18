@@ -32,8 +32,6 @@ interface JobCalendarProps {
   activeStartDate: Date;
   onActiveStartDateChange: (date: Date) => void;
   onSelectDay: (day: string) => void;
-  /** Show the stacked bars of that day's state census. */
-  showUpdates: boolean;
 }
 
 /**
@@ -52,7 +50,6 @@ export default function JobCalendar({
   activeStartDate,
   onActiveStartDateChange,
   onSelectDay,
-  showUpdates,
 }: JobCalendarProps) {
   const minDate = parseDayKey(firstDay);
   const maxDate = parseDayKey(lastDay);
@@ -187,7 +184,6 @@ export default function JobCalendar({
               census={censuses?.get(key)}
               activity={activities?.get(key)}
               peakBinTotal={peakBinTotal}
-              showUpdates={showUpdates}
             />
           );
         }}
@@ -216,13 +212,11 @@ function TileBody({
   census,
   activity,
   peakBinTotal,
-  showUpdates,
 }: {
   slice: DaySlice | undefined;
   census: DayCensus | undefined;
   activity: DayActivity | undefined;
   peakBinTotal: number;
-  showUpdates: boolean;
 }) {
   if (!slice) return null;
 
@@ -230,11 +224,7 @@ function TileBody({
   // all-jobs mode shows the magnitude bars only when something changed. No
   // placed waffle on this calendar -- placements already appear as the bars'
   // Placed/Became Active segments.
-  const barsVisible = showUpdates
-    ? census
-      ? census.hasData
-      : !!activity?.hasData
-    : false;
+  const barsVisible = census ? census.hasData : !!activity?.hasData;
   if (!barsVisible) {
     if (slice.queued === 0 && slice.changed === 0) return null;
     return (
