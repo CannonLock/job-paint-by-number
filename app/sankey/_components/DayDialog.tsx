@@ -20,8 +20,10 @@ import { STATE_ORDER, STATE_STYLES } from "./palette";
 import JobGrid from "./JobGrid";
 import { ActivityRows, CohortStateRows } from "./StateRows";
 import StateFlowSankey from "./StateFlowSankey";
+import ClusterJourneySankey from "./ClusterJourneySankey";
 import {
   ALL_CLUSTERS,
+  buildJourneyMap,
   buildSliceMap,
   compactNumber,
   formatDayLong,
@@ -110,9 +112,16 @@ export default function DayDialog({
 
   // buildSliceMap walks the whole window, but the arrays are pre-aggregated and
   // small (tens of rows), so per-open recomputation is cheap.
-  const slice = useMemo(
-    () => (day ? (buildSliceMap(data, effectiveCluster).get(day) ?? null) : null),
-    [data, effectiveCluster, day],
+  const slices = useMemo(() => buildSliceMap(data, effectiveCluster), [data, effectiveCluster]);
+  const slice = day ? (slices.get(day) ?? null) : null;
+
+  // Cluster mode swaps the changes diagram for the whole-cohort journey.
+  const journey = useMemo(
+    () =>
+      day && effectiveCluster !== ALL_CLUSTERS
+        ? (buildJourneyMap(data, effectiveCluster, slices).get(day) ?? null)
+        : null,
+    [data, effectiveCluster, slices, day],
   );
 
   return (
@@ -233,23 +242,35 @@ export default function DayDialog({
                   all jobs, whenever they were placed
                 </Typography>
 
-                {slice.changed === 0 ? (
+                {slice.changed === 0 && !journey?.alive ? (
                   <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.75 }}>
                     No jobs changed state.
                   </Typography>
                 ) : (
                   <>
-                    {/* Full variant: nodes labelled with counts, details on hover. */}
-                    {hasFlow(slice.flows) && (
+                    {/* Cluster mode: the whole cohort's journey through this day.
+                        All-clusters keeps the transition diagram. */}
+                    {journey?.alive ? (
                       <Box sx={{ mt: 1 }}>
-                        <StateFlowSankey
-                          flows={slice.flows}
-                          carry={slice.carry}
+                        <ClusterJourneySankey
+                          journey={journey}
                           variant="full"
                           height={200}
-                          label={`State changes on ${formatDayLong(slice.day)}`}
+                          label={`Cluster journey through ${formatDayLong(slice.day)}`}
                         />
                       </Box>
+                    ) : (
+                      hasFlow(slice.flows) && (
+                        <Box sx={{ mt: 1 }}>
+                          <StateFlowSankey
+                            flows={slice.flows}
+                            carry={slice.carry}
+                            variant="full"
+                            height={200}
+                            label={`State changes on ${formatDayLong(slice.day)}`}
+                          />
+                        </Box>
+                      )
                     )}
                     <Box sx={{ mt: 1.5 }}>
                       <ActivityRows

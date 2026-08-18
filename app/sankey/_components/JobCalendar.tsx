@@ -7,6 +7,10 @@ import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
 
 import type { DaySlice } from "../types";
+import ClusterJourneySankey, {
+  journeyCategoryCount,
+  journeyTileHeight,
+} from "./ClusterJourneySankey";
 import JobGrid from "./JobGrid";
 import StateFlowSankey, { relativeFlowHeight } from "./StateFlowSankey";
 import {
@@ -16,10 +20,17 @@ import {
   hasFlow,
   isEmptySlice,
   parseDayKey,
+  type JourneyDay,
 } from "./dayModel";
 
 interface JobCalendarProps {
   slices: Map<string, DaySlice>;
+  /**
+   * Cluster mode: per-day whole-cohort journeys. When set, tiles draw the
+   * constant-total journey Sankey at a fixed height instead of the changes-only
+   * diagram, so the month reads as the cluster's work turning teal day by day.
+   */
+  journeys?: Map<string, JourneyDay> | null;
   /** First and last day the baked window covers, "YYYY-MM-DD". */
   firstDay: string;
   lastDay: string;
@@ -45,6 +56,7 @@ interface JobCalendarProps {
  */
 export default function JobCalendar({
   slices,
+  journeys = null,
   firstDay,
   lastDay,
   asOf,
@@ -77,6 +89,25 @@ export default function JobCalendar({
     }
     return { peakChanged: peak, quietestChanged: Number.isFinite(quietest) ? quietest : 0 };
   }, [slices, activeStartDate]);
+
+  // Journey mode: the most categories any tile in the whole window draws. Every
+  // tile's canvas height is compensated against this so all tiles share one
+  // jobs-per-pixel scale and adjacent days' columns line up (see
+  // journeyTileHeight). Deliberately window-wide, not per-month: the month grid
+  // also renders its neighbouring days (Jul 31 sits in August's grid and vice
+  // versa), so a per-month max let a busier neighbouring day slip in unscaled and
+  // break alignment exactly at the month border -- and paging months no longer
+  // rescales the tiles. Cost: a quiet month cedes ~8px per category the window's
+  // busiest day has over its own.
+  const maxCategories = useMemo(() => {
+    if (!journeys) return 1;
+    let max = 1;
+    for (const journey of journeys.values()) {
+      if (!journey.alive) continue;
+      max = Math.max(max, journeyCategoryCount(journey));
+    }
+    return max;
+  }, [journeys]);
 
   return (
     <Box
@@ -129,8 +160,12 @@ export default function JobCalendar({
           gap: "4px",
           // Tall enough for the stack: flow slot, its caption, the waffle, its
           // caption. Content is top-aligned so every tile's rows line up.
-          minHeight: { xs: 180, sm: 216 },
-          padding: "6px 4px",
+          // Journey tiles carry no waffle, so their rows are shorter.
+          minHeight: journeys ? 136 : { xs: 180, sm: 216 },
+          // Journey mode drops the horizontal padding so one day's end column
+          // sits against the next day's start column and the week reads as a
+          // continuous flow.
+          padding: journeys ? "6px 0" : "6px 4px",
           border: "1px solid",
           borderColor: "divider",
           background: "none",
@@ -178,13 +213,21 @@ export default function JobCalendar({
         tileClassName={({ date, view }) =>
           view === "month" && dayKeyOf(date) === asOf ? "day-as-of" : null
         }
-        tileDisabled={({ date }) => isEmptySlice(slices.get(dayKeyOf(date)))}
+        tileDisabled={({ date }) => {
+          const key = dayKeyOf(date);
+          // In journey mode a day stays enabled while the cluster is alive, even
+          // if nothing moved -- but not after everything has finished.
+          if (journeys) return !journeys.get(key)?.alive && isEmptySlice(slices.get(key));
+          return isEmptySlice(slices.get(key));
+        }}
         tileContent={({ date, view }) => {
           if (view !== "month") return null;
-          const slice = slices.get(dayKeyOf(date));
+          const key = dayKeyOf(date);
           return (
             <TileBody
-              slice={slice}
+              slice={slices.get(key)}
+              journey={journeys?.get(key) ?? null}
+              maxCategories={maxCategories}
               showPlaced={showPlaced}
               showUpdates={showUpdates}
               peakChanged={peakChanged}
@@ -230,12 +273,18 @@ const TILE_CAPTION = {
 
 function TileBody({
   slice,
+  journey,
+  maxCategories,
   showPlaced,
   showUpdates,
   peakChanged,
   quietestChanged,
 }: {
   slice: DaySlice | undefined;
+  /** Set in cluster mode: this day's whole-cohort journey. */
+  journey: JourneyDay | null;
+  /** Most categories any journey tile in the window draws; anchors the shared scale. */
+  maxCategories: number;
   showPlaced: boolean;
   showUpdates: boolean;
   /** Busiest day currently on screen; anchors the top of the tile scale. */
@@ -248,7 +297,44 @@ function TileBody({
   const placedVisible = showPlaced && slice.queued > 0;
   // Held as a value rather than a boolean so the type predicate narrows below.
   const flows = showUpdates && hasFlow(slice.flows) ? slice.flows : null;
-  const flowVisible = flows !== null;
+  // Quiet days still draw: an alive cluster with zero changes repeats its census
+  // unchanged, which keeps the cohort continuously in view across the month.
+  const journeyVisible = journey !== null && showUpdates && journey.alive;
+  const flowVisible = journey !== null ? journeyVisible : flows !== null;
+
+  // Journey tiles: the whole cluster at a constant height, every day it exists.
+  // No waffle here -- the journey diagram already carries the placed state, so
+  // the tile is just the flow and its caption.
+  if (journey !== null) {
+    if (!journeyVisible) return null;
+    return (
+      <>
+        {/*
+          Full tile width, no max-width cap: with the tile's x padding gone,
+          the end column of one day abuts the start column of the next. The
+          canvas is top-anchored in a fixed slot at a compensated height, so
+          every tile draws at the same jobs-per-pixel scale regardless of how
+          many categories it splits into (see journeyTileHeight).
+        */}
+        <Box sx={{ width: "100%", height: SANKEY_SLOT, minWidth: 0 }}>
+          <ClusterJourneySankey
+            journey={journey}
+            variant="tile"
+            height={journeyTileHeight(
+              journeyCategoryCount(journey),
+              maxCategories,
+              SANKEY_SLOT,
+            )}
+            label={`${compactNumber(journey.total)} jobs, ${compactNumber(slice.changed)} changed state`}
+          />
+        </Box>
+        <Typography component="span" sx={TILE_CAPTION}>
+          {compactNumber(slice.changed)} changed
+        </Typography>
+      </>
+    );
+  }
+
   if (!placedVisible && !flowVisible) {
     // slice.changed is distinct jobs, not a sum of the transition lines -- a job
     // that ran and finished today counts once here and twice in the day detail.

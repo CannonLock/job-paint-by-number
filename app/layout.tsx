@@ -21,7 +21,9 @@ export const metadata: Metadata = {
 
 const pages = [
   { label: 'Large Grid', path: '/', icon: <PlayArrow /> },
-	{ label: 'Daily Breakdown', path: '/days', icon: <PlayArrow /> },
+	{ label: 'Daily (Sankey Version)', path: '/sankey', icon: <PlayArrow /> },
+	{ label: 'Daily (Stacked Bar Version)', path: '/stacked-bar', icon: <PlayArrow /> },
+
 ]
 
 export default function RootLayout({

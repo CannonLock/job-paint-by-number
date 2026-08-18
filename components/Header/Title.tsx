@@ -5,7 +5,6 @@ import React from "react";
 
 const Title = () => (
 	<Link href={"/"} display={'flex'} flexDirection={'row'} alignItems={'center'} gap={{lg: 3, xs: 1}} component={'a'}>
-		<Icon />
 		<Typography variant="h4" sx={{color: 'primary.contrastText'}}>
 			Demo Website
 		</Typography>

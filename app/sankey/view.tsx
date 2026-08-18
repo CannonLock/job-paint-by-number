@@ -22,6 +22,7 @@ import PeriodCard from "./_components/YesterdayCard";
 import {
   ALL_CLUSTERS,
   asOfDay,
+  buildJourneyMap,
   buildPeriodSummary,
   buildSliceMap,
   formatDayShort,
@@ -69,6 +70,13 @@ export default function DaysView({ data }: DaysViewProps) {
   });
 
   const slices = useMemo(() => buildSliceMap(data, cluster), [data, cluster]);
+
+  // Cluster mode: every day shows the whole cohort's journey instead of the
+  // changes-only diagram. Null for all-clusters, which keeps its existing view.
+  const journeys = useMemo(
+    () => (cluster === ALL_CLUSTERS ? null : buildJourneyMap(data, cluster, slices)),
+    [data, cluster, slices],
+  );
 
   const summary = useMemo(
     () => buildPeriodSummary(data, slices, period),
@@ -172,9 +180,13 @@ export default function DaysView({ data }: DaysViewProps) {
               aria-label="Which graphics to draw on each day"
               sx={{ mt: 0.5 }}
             >
-              <ToggleButton value="placed" aria-label="Show jobs placed each day">
-                Placed
-              </ToggleButton>
+              {/* Journey tiles carry no waffle, so the Placed toggle only exists
+                  where it does something. */}
+              {cluster === ALL_CLUSTERS && (
+                <ToggleButton value="placed" aria-label="Show jobs placed each day">
+                  Placed
+                </ToggleButton>
+              )}
               <ToggleButton value="updates" aria-label="Show state changes each day">
                 Updates
               </ToggleButton>
@@ -190,6 +202,7 @@ export default function DaysView({ data }: DaysViewProps) {
 
         <JobCalendar
           slices={slices}
+          journeys={journeys}
           firstDay={data.days[0]}
           lastDay={asOf}
           asOf={asOf}

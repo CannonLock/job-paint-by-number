@@ -141,6 +141,11 @@ const DAY_COLUMNS: Record<string, number> = {
   [NODE.stillActive]: 2,
 };
 
+// A fixed state-order `priority` map was tried here (removed at the bottom,
+// completed, active, placed on top) and reverted: forcing that order overrode the
+// plugin's crossing-minimising layout and made the ribbons overlap far more.
+// Node order is left to the plugin.
+
 /** Period mode adds the queue-pool rank, so everything downstream shifts right. */
 const PERIOD_COLUMNS: Record<string, number> = {
   [NODE.placedToday]: 0,

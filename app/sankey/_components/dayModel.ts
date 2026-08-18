@@ -148,6 +148,79 @@ export function buildSliceMap(data: DayData, cluster: string): Map<string, DaySl
   return slices;
 }
 
+/**
+ * One day of a single cluster's whole-cohort journey: the census of every job the
+ * cluster has placed so far, at the day's open and close, plus what moved between.
+ *
+ * This powers the cluster-focused Sankey: unlike the all-jobs diagrams, jobs never
+ * leave it -- completed and removed work persists in the census, so day after day
+ * the same total flows through and the reader watches placed turn into completed.
+ */
+export interface JourneyDay {
+  day: string;
+  /**
+   * Census when the day opens, with the day's own placements already counted as
+   * Placed -- placement is where a job enters the diagram.
+   */
+  start: StateCounts;
+  /** Census when the day closes: the summed cohort asOf[day]. */
+  end: StateCounts;
+  flows: DayFlows | null;
+  /** Jobs the diagram holds this day (sum of `end`). Grows only when new work is placed. */
+  total: number;
+  /**
+   * True while the cluster still has anything in flight this day: placed or
+   * active when the day opened (today's placements included). The day the last
+   * job finishes is alive -- the transition to all-terminal is worth seeing --
+   * but every day after it is not, so a long-finished cluster stops repeating
+   * its static all-teal diagram to the end of the window.
+   */
+  alive: boolean;
+}
+
+/**
+ * Per-day journey censuses for one cluster (or all), keyed by day.
+ *
+ * The end census is measured -- cohorts store their four-state breakdown as of the
+ * end of every day -- and the start census is yesterday's end plus today's
+ * placements, so nothing here is inferred from transitions.
+ */
+export function buildJourneyMap(
+  data: DayData,
+  cluster: string,
+  slices: Map<string, DaySlice>,
+): Map<string, JourneyDay> {
+  // End-of-day census per day, summed over the cluster's cohorts. A cohort only
+  // carries asOf entries from its own queue day onward, so earlier days simply
+  // see nothing from it.
+  const endByDay = new Map<string, StateCounts>();
+  for (const cohort of data.cohorts) {
+    if (cluster !== ALL_CLUSTERS && String(cohort.cluster) !== cluster) continue;
+    for (const [day, counts] of Object.entries(cohort.asOf)) {
+      if (day === WINDOW_START_DAY) continue;
+      endByDay.set(day, addCounts(endByDay.get(day) ?? ZERO, counts));
+    }
+  }
+
+  const journeys = new Map<string, JourneyDay>();
+  let prevEnd: StateCounts = ZERO;
+  for (const day of data.days) {
+    const end = endByDay.get(day) ?? prevEnd;
+    const placedNew = slices.get(day)?.queued ?? 0;
+    const start: StateCounts = [prevEnd[0] + placedNew, prevEnd[1], prevEnd[2], prevEnd[3]];
+    journeys.set(day, {
+      day,
+      start,
+      end,
+      flows: slices.get(day)?.flows ?? null,
+      total: end[0] + end[1] + end[2] + end[3],
+      alive: start[0] + start[1] > 0,
+    });
+    prevEnd = end;
+  }
+  return journeys;
+}
+
 export interface MonthRollup {
   /** Jobs queued during this month. */
   queued: number;
