@@ -174,6 +174,22 @@ const pushIf = (edges: Edge[], from: string, to: string, flow: number) => {
   if (flow > 0) edges.push({ from, to, flow });
 };
 
+/** The measured transitions, dropped to zero-free edges. Shared by every builder. */
+function transitionEdges(flows: DayFlows): Edge[] {
+  return TRANSITION_EDGES.filter((edge) => flows[edge.key] > 0).map((edge) => ({
+    from: edge.from,
+    to: edge.to,
+    flow: flows[edge.key],
+  }));
+}
+
+/** Jobs placed today that did not move: still placed when the day closed. */
+function placedTodayStays(flows: DayFlows, carry: DayCarry): number {
+  const todayLeft =
+    flows.placedTodayToActive + flows.placedTodayToRemoved + flows.placedTodayToCompleted;
+  return Math.min(clampPositive(carry.placedNew - todayLeft), carry.placedOut);
+}
+
 /**
  * Edges for one day.
  *
@@ -183,24 +199,37 @@ const pushIf = (edges: Edge[], from: string, to: string, flow: number) => {
  * inferred, with only the split between the two sources derived.
  */
 function buildDayEdges(flows: DayFlows, carry: DayCarry | null): Edge[] {
-  const edges = TRANSITION_EDGES.filter((edge) => flows[edge.key] > 0).map((edge) => ({
-    from: edge.from,
-    to: edge.to,
-    flow: flows[edge.key],
-  }));
+  const edges = transitionEdges(flows);
   if (!carry) return edges;
 
   pushIf(edges, NODE.activeBefore, NODE.active, carry.activeIn);
 
   // Of the jobs placed today, those that did not move are still placed tonight.
-  const todayLeft =
-    flows.placedTodayToActive + flows.placedTodayToRemoved + flows.placedTodayToCompleted;
-  const todayStays = Math.min(clampPositive(carry.placedNew - todayLeft), carry.placedOut);
+  const todayStays = placedTodayStays(flows, carry);
   pushIf(edges, NODE.placedToday, NODE.stillPlaced, todayStays);
   // The rest of tonight's queue is older work, taken as the measured remainder.
   pushIf(edges, NODE.placedBefore, NODE.stillPlaced, clampPositive(carry.placedOut - todayStays));
 
   pushIf(edges, NODE.active, NODE.stillActive, carry.activeOut);
+  return edges;
+}
+
+/**
+ * Edges for the changes-only variant the calendar tiles draw.
+ *
+ * Only state that changed during the day appears: every measured transition, plus
+ * the jobs placed today that did not move — being placed is itself that day's
+ * change. What the full diagram carries and this one deliberately omits is
+ * unchanged state: the backlog that opened and closed the day as Placed, and the
+ * jobs that were already running and still are (activeBefore → active →
+ * stillActive). Jobs that started today and are still running simply end at
+ * Active — the start is the change, and drawing a carry-out for them would need
+ * an unmeasured split of activeOut between carried and fresh work.
+ */
+function buildChangeEdges(flows: DayFlows, carry: DayCarry | null): Edge[] {
+  const edges = transitionEdges(flows);
+  if (!carry) return edges;
+  pushIf(edges, NODE.placedToday, NODE.stillPlaced, placedTodayStays(flows, carry));
   return edges;
 }
 
@@ -306,6 +335,13 @@ interface StateFlowSankeyProps {
    */
   variant?: "tile" | "full";
   /**
+   * Draw only the state that changed during the day: transitions plus jobs placed
+   * that day. Unchanged carried state (placed-before that stayed placed, active
+   * that stayed active) is omitted. The calendar tiles use this; the period
+   * breakdown and the day detail keep the complete flow.
+   */
+  changesOnly?: boolean;
+  /**
    * Rename the source nodes for a multi-day period, where "today" is no longer a
    * single day: the split is between jobs placed on the day they moved and jobs
    * placed before it.
@@ -327,6 +363,7 @@ export default function StateFlowSankey({
   flows,
   carry = null,
   variant = "full",
+  changesOnly = false,
   sameDayLabels = false,
   height = 160,
   label,
@@ -339,8 +376,12 @@ export default function StateFlowSankey({
     if (!canvas) return;
 
     // Period mode routes both placed sources through the queue pool; a single
-    // day keeps its directly-attributable split.
-    const data = sameDayLabels ? buildPeriodEdges(flows, carry) : buildDayEdges(flows, carry);
+    // day keeps its directly-attributable split; changes-only drops unchanged state.
+    const data = sameDayLabels
+      ? buildPeriodEdges(flows, carry)
+      : changesOnly
+        ? buildChangeEdges(flows, carry)
+        : buildDayEdges(flows, carry);
     if (data.length === 0) return;
 
     const isTile = variant === "tile";
@@ -418,7 +459,7 @@ export default function StateFlowSankey({
       chartRef.current?.destroy();
       chartRef.current = null;
     };
-  }, [flows, carry, variant, sameDayLabels]);
+  }, [flows, carry, variant, changesOnly, sameDayLabels]);
 
   return (
     <Box

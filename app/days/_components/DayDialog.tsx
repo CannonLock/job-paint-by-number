@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import {
   Box,
   Dialog,
@@ -7,25 +8,50 @@ import {
   DialogTitle,
   Divider,
   IconButton,
+  MenuItem,
+  Select,
   Stack,
   Typography,
 } from "@mui/material";
 import Close from "@mui/icons-material/Close";
 
-import type { DaySlice } from "../types";
+import type { DayData, DaySlice } from "../types";
 import { STATE_ORDER, STATE_STYLES } from "./palette";
 import JobGrid from "./JobGrid";
 import { ActivityRows, CohortStateRows } from "./StateRows";
 import StateFlowSankey from "./StateFlowSankey";
-import { formatDayLong, formatDayShort, hasFlow } from "./dayModel";
+import {
+  ALL_CLUSTERS,
+  buildSliceMap,
+  compactNumber,
+  formatDayLong,
+  formatDayShort,
+  hasFlow,
+} from "./dayModel";
 import { boxScaleLabel } from "./waffle";
 
 interface DayDialogProps {
-  slice: DaySlice | null;
+  data: DayData;
+  /** The day being inspected, or null when the dialog is closed. */
+  day: string | null;
+  /** The page-level cluster selection; the dialog is scoped to it. */
+  cluster: string;
+  /**
+   * Change the page-level selection. The dialog's select drives the same state
+   * as the page's, so the two can never disagree and the URL stays linkable.
+   */
+  onClusterChange: (cluster: string) => void;
   /** The day everything is read as of. */
   asOf: string;
   open: boolean;
   onClose: () => void;
+}
+
+/** What one cluster did on the dialog's day, for the select's option labels. */
+interface DayClusterEntry {
+  id: string;
+  placed: number;
+  changed: number;
 }
 
 function gridLabel(slice: DaySlice, asOf: string): string {
@@ -39,8 +65,56 @@ function gridLabel(slice: DaySlice, asOf: string): string {
   );
 }
 
+function optionLabel(entry: DayClusterEntry): string {
+  const parts: string[] = [];
+  if (entry.placed > 0) parts.push(`${compactNumber(entry.placed)} placed`);
+  if (entry.changed > 0) parts.push(`${compactNumber(entry.changed)} changed`);
+  return parts.length > 0 ? `Cluster ${entry.id} · ${parts.join(", ")}` : `Cluster ${entry.id}`;
+}
+
 /** Centred per-day breakdown: where that day's cohort stands, and what moved that day. */
-export default function DayDialog({ slice, asOf, open, onClose }: DayDialogProps) {
+export default function DayDialog({
+  data,
+  day,
+  cluster,
+  onClusterChange,
+  asOf,
+  open,
+  onClose,
+}: DayDialogProps) {
+  // Clusters that are part of this day: a cohort placed on it, or any activity.
+  const dayClusters = useMemo<DayClusterEntry[]>(() => {
+    if (!day) return [];
+    const byId = new Map<string, DayClusterEntry>();
+    const entry = (id: number) => {
+      const key = String(id);
+      let e = byId.get(key);
+      if (!e) byId.set(key, (e = { id: key, placed: 0, changed: 0 }));
+      return e;
+    };
+    for (const cohort of data.cohorts) {
+      if (cohort.day === day && cohort.queued > 0) entry(cohort.cluster).placed += cohort.queued;
+    }
+    for (const row of data.activity) {
+      if (row.day === day) entry(row.cluster).changed += row.changed;
+    }
+    return [...byId.values()].sort((a, b) => Number(a.id) - Number(b.id));
+  }, [data, day]);
+
+  // A page-level selection that plays no part in this day falls back to all
+  // clusters rather than presenting an empty breakdown.
+  const effectiveCluster =
+    cluster !== ALL_CLUSTERS && !dayClusters.some((c) => c.id === cluster)
+      ? ALL_CLUSTERS
+      : cluster;
+
+  // buildSliceMap walks the whole window, but the arrays are pre-aggregated and
+  // small (tens of rows), so per-open recomputation is cheap.
+  const slice = useMemo(
+    () => (day ? (buildSliceMap(data, effectiveCluster).get(day) ?? null) : null),
+    [data, effectiveCluster, day],
+  );
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth scroll="body">
       {slice && (
@@ -70,6 +144,33 @@ export default function DayDialog({ slice, asOf, open, onClose }: DayDialogProps
           */}
           <DialogContent dividers>
             <Stack spacing={3}>
+              <Box>
+                <Typography
+                  variant="overline"
+                  component="label"
+                  htmlFor="day-cluster-select"
+                  sx={{ color: "text.secondary", display: "block", lineHeight: 1.6 }}
+                >
+                  Cluster
+                </Typography>
+                <Select
+                  id="day-cluster-select"
+                  size="small"
+                  value={effectiveCluster}
+                  onChange={(event) => onClusterChange(String(event.target.value))}
+                  sx={{ mt: 0.5, minWidth: 260 }}
+                >
+                  <MenuItem value={ALL_CLUSTERS}>
+                    All clusters on this day ({dayClusters.length})
+                  </MenuItem>
+                  {dayClusters.map((c) => (
+                    <MenuItem key={c.id} value={c.id}>
+                      {optionLabel(c)}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </Box>
+
               <Box component="section">
                 <Typography
                   variant="overline"

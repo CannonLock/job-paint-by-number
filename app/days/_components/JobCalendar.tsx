@@ -297,6 +297,8 @@ function TileBody({
               flows={flows}
               carry={slice.carry}
               variant="tile"
+              // Tiles show what moved that day; unchanged backlog would drown it.
+              changesOnly
               height={relativeFlowHeight(
                 slice.changed,
                 quietestChanged,

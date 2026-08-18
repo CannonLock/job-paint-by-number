@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Box,
   Button,
@@ -29,6 +29,7 @@ import {
   parseDayKey,
   type PeriodKey,
 } from "./_components/dayModel";
+import { CLUSTER_PARAM, writeClusterParam } from "./_components/urlState";
 
 interface DaysViewProps {
   data: DayData;
@@ -38,6 +39,23 @@ export default function DaysView({ data }: DaysViewProps) {
   const asOf = asOfDay(data);
 
   const [cluster, setCluster] = useState<string>(ALL_CLUSTERS);
+  // Deep link: /days?clusterId=13 opens with that cluster selected. Read once on
+  // mount rather than via useSearchParams — this page is statically exported, so
+  // an effect avoids the Suspense boundary useSearchParams demands and any
+  // hydration mismatch from reading window during render. An id the data does not
+  // know (stale link, renumbered bake) is ignored and the page stays on all
+  // clusters.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get(CLUSTER_PARAM);
+    if (id && data.clusters.some((c) => String(c.id) === id)) setCluster(id);
+  }, [data]);
+
+  // Selecting a cluster writes it back to the URL, so the current view is always
+  // linkable. See urlState.ts for the replaceState rationale.
+  const selectCluster = (next: string) => {
+    setCluster(next);
+    writeClusterParam(next);
+  };
   const [openDay, setOpenDay] = useState<string | null>(null);
   // Which of the two per-day graphics the calendar draws. Both on by default;
   // turning one off gives the other the full width of a tile.
@@ -110,7 +128,7 @@ export default function DaysView({ data }: DaysViewProps) {
               id="cluster-select"
               size="small"
               value={cluster}
-              onChange={(event) => setCluster(String(event.target.value))}
+              onChange={(event) => selectCluster(String(event.target.value))}
               sx={{ mt: 0.5, minWidth: 260 }}
             >
               <MenuItem value={ALL_CLUSTERS}>All clusters ({data.clusters.length})</MenuItem>
@@ -184,7 +202,10 @@ export default function DaysView({ data }: DaysViewProps) {
       </Stack>
 
       <DayDialog
-        slice={openDay ? (slices.get(openDay) ?? null) : null}
+        data={data}
+        day={openDay}
+        cluster={cluster}
+        onClusterChange={selectCluster}
         asOf={asOf}
         open={openDay !== null}
         onClose={() => setOpenDay(null)}
