@@ -40,3 +40,7 @@ next-env.d.ts
 scripts
 
 .idea
+
+
+# Images
+public/nextImageExportOptimizer
