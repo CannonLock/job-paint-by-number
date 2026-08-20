@@ -156,7 +156,7 @@ export default function DaysView({ data }: DaysViewProps) {
           {cluster !== ALL_CLUSTERS && (
             <Button
               component={Link}
-              href={`/days/cluster/${cluster}`}
+              href={`/sankey/cluster/${cluster}`}
               variant="outlined"
               size="medium"
               endIcon={<ArrowForwardIcon />}

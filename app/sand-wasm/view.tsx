@@ -1,9 +1,25 @@
 "use client";
 
+// The Rust/WebAssembly variant of /sand.
+//
+// Deliberately a near-copy of `app/sand/view.tsx`: same lanes, same camera, same
+// settle gate, same labels, same scrubber, same ms/frame readout. The ONLY
+// difference is which engine runs the cells -- `WasmPileEngine` (Rust compiled to
+// wasm, owning the cell array and the RGBA buffer in linear memory) instead of
+// `PileEngine` (TypeScript, owning the same two arrays on the JS heap). Anything
+// else that diverged would make the two numbers incomparable.
+//
+// The census math is not duplicated: this page imports the very same
+// `app/sand/_components/timeline.ts` the original uses, so both pages are driven
+// by identical job flows and only the cell-level physics differs.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Box,
   Button,
+  Chip,
+  CircularProgress,
   IconButton,
   MenuItem,
   Paper,
@@ -23,15 +39,6 @@ import FitScreen from "@mui/icons-material/FitScreen";
 import type { DayData } from "../sankey/types";
 import { ALL_CLUSTERS, formatDayLong, formatDayShort } from "../sankey/_components/dayModel";
 import {
-  PileEngine,
-  SAND_ACTIVE,
-  SAND_COMPLETED,
-  SAND_PLACED,
-  SAND_REMOVED,
-  type LaneInput,
-  type SandMaterial,
-} from "./_components/pileEngine";
-import {
   GrainMeter,
   applyDay,
   buildTimeline,
@@ -39,7 +46,15 @@ import {
   daySeconds,
   peakCensus,
   type Census,
-} from "./_components/timeline";
+} from "../sand/_components/timeline";
+import { SAND_ACTIVE, SAND_COMPLETED, SAND_PLACED, SAND_REMOVED } from "./_components/materials";
+import type { SandMaterial } from "./_components/materials";
+import {
+  WasmPileEngine,
+  loadWasmPileEngine,
+  type LaneInput,
+  type SandWasmModule,
+} from "./_components/wasmEngine";
 
 /** Lifecycle order, left to right; most transitions read as rightward moves. */
 const LANES: { id: keyof Census; label: string; material: SandMaterial }[] = [
@@ -61,11 +76,11 @@ interface Camera {
   zoom: number;
 }
 
-interface SandViewProps {
+interface SandWasmViewProps {
   data: DayData;
 }
 
-export default function SandView({ data }: SandViewProps) {
+export default function SandWasmView({ data }: SandWasmViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [cluster, setCluster] = useState<string>(ALL_CLUSTERS);
   const [playing, setPlaying] = useState(true);
@@ -76,6 +91,25 @@ export default function SandView({ data }: SandViewProps) {
   /** Smoothed simulation+render cost per frame, for judging fidelity trade-offs. */
   const [frameMs, setFrameMs] = useState(0);
 
+  // The engine has to be fetched over the network before anything can run, which
+  // the TypeScript page never has to think about.
+  const [wasm, setWasm] = useState<SandWasmModule | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    loadWasmPileEngine()
+      .then((mod) => {
+        if (alive) setWasm(mod);
+      })
+      .catch((error: unknown) => {
+        if (alive) setLoadError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const timeline = useMemo(() => buildTimeline(data, cluster), [data, cluster]);
   const peaks = useMemo(() => peakCensus(timeline), [timeline]);
   const peakActivity = useMemo(
@@ -85,7 +119,7 @@ export default function SandView({ data }: SandViewProps) {
 
   // Everything the animation loop mutates lives in refs: re-rendering React 60
   // times a second to move sand would cost more than the simulation itself.
-  const engineRef = useRef<PileEngine | null>(null);
+  const engineRef = useRef<WasmPileEngine | null>(null);
   const metersRef = useRef<Record<string, GrainMeter>>({});
   /**
    * Grains owed to a destination but not yet moved: remove() can only vanish
@@ -154,14 +188,27 @@ export default function SandView({ data }: SandViewProps) {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !wasm) return;
 
     // --- World -----------------------------------------------------------
     const laneInputs: LaneInput[] = LANES.map((lane) => ({
       ...lane,
       peakGrains: Math.ceil(peaks[lane.id]),
     }));
-    const engine = new PileEngine(laneInputs);
+    // The Rust side has no entropy source of its own, so the jitter seed comes
+    // from here. A wall-clock seed keeps successive runs from being identical.
+    //
+    // Building the world allocates tens of megabytes of wasm linear memory and
+    // then aliases it into an ImageData; both can fail on a device that is out of
+    // room. Report that in the same place as a load failure rather than throwing
+    // out of an effect and blanking the page.
+    let engine: WasmPileEngine;
+    try {
+      engine = new WasmPileEngine(wasm, laneInputs, (Date.now() & 0x7fffffff) || 1);
+    } catch (error: unknown) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      return;
+    }
     engineRef.current = engine;
 
     const worldW = engine.width;
@@ -171,10 +218,11 @@ export default function SandView({ data }: SandViewProps) {
     worldCanvas.height = worldH;
     const worldCtx = worldCanvas.getContext("2d", { alpha: false });
     const ctx = canvas.getContext("2d", { alpha: false });
-    if (!worldCtx || !ctx) return;
-    // Shares the engine's own pixel memory: the engine paints cells as they
-    // change, and each frame uploads only the dirty rectangle.
-    const worldImage = new ImageData(engine.pixelBytes, worldW, worldH);
+    if (!worldCtx || !ctx) {
+      engine.free();
+      setLoadError("This browser did not give us a 2D canvas context.");
+      return;
+    }
 
     // --- Camera ------------------------------------------------------------
     const dpr = window.devicePixelRatio || 1;
@@ -328,9 +376,25 @@ export default function SandView({ data }: SandViewProps) {
 
       const simStart = performance.now();
       engine.step(tick);
-      const dirtyRect = engine.consumeDirty();
-      if (dirtyRect) {
-        worldCtx.putImageData(worldImage, 0, 0, dirtyRect.x, dirtyRect.y, dirtyRect.w, dirtyRect.h);
+      // A wasm `memory.grow` would have detached the ImageData aliasing linear
+      // memory. The engine pre-reserves so this should never fire; if it does,
+      // the views have just been rebuilt and the whole world must be re-sent.
+      if (engine.refreshViews()) {
+        engine.consumeDirty();
+        worldCtx.putImageData(engine.worldImage, 0, 0);
+      } else {
+        const dirtyRect = engine.consumeDirty();
+        if (dirtyRect) {
+          worldCtx.putImageData(
+            engine.worldImage,
+            0,
+            0,
+            dirtyRect.x,
+            dirtyRect.y,
+            dirtyRect.w,
+            dirtyRect.h,
+          );
+        }
       }
 
       // Viewport blit: nearest-neighbour so grains stay hard squares at any zoom.
@@ -404,8 +468,11 @@ export default function SandView({ data }: SandViewProps) {
       canvas.removeEventListener("pointercancel", onPointerUp);
       engineRef.current = null;
       cameraControlsRef.current = null;
+      // The world is tens of megabytes of wasm linear memory; hand it back so a
+      // cluster change does not stack another one on top.
+      engine.free();
     };
-  }, [timeline, peaks, seekTo]);
+  }, [wasm, timeline, peaks, seekTo]);
 
   const currentDay = timeline.days[Math.min(dayIndex, timeline.days.length - 1)];
   const totalFinished = totals.completed + totals.removed;
@@ -414,26 +481,47 @@ export default function SandView({ data }: SandViewProps) {
   return (
     <Box component="main" sx={{ px: { xs: 2, md: 4 }, py: { xs: 3, md: 4 }, maxWidth: 1180, mx: "auto" }}>
       <Stack spacing={0.5} sx={{ mb: 2.5 }}>
-        <Typography variant="h4" component="h1" sx={{ fontWeight: 700 }}>
-          {data.owner}&apos;s jobs, as sand
-        </Typography>
+        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Typography variant="h4" component="h1" sx={{ fontWeight: 700 }}>
+            {data.owner}&apos;s jobs, as sand
+          </Typography>
+          <Chip label="Rust / WebAssembly" color="primary" size="small" variant="outlined" />
+        </Stack>
         <Typography variant="body1" sx={{ color: "text.secondary" }}>
           Four piles, one per state, and <strong>every grain is one job</strong> — a pile holds
           exactly the jobs in that state right now. When a job changes state its grain vanishes
           from the old pile and drops into the new one. Scroll to zoom, drag to pan, click the
           strip below to jump to a day.
         </Typography>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          This is the <strong>Rust/WebAssembly variant</strong> of the sand page. The cell-level
+          automaton — the cells, the pixels, the fliers — is a Rust port compiled to wasm that owns
+          both the cell array and the RGBA buffer in its own linear memory, so a frame&apos;s pixels
+          reach the canvas with no copy at all. Everything above the cells is unchanged and shared
+          with <code>/sand</code>: the same census math, the same day pacing, the same controls.
+          Compare the ms/frame readouts.
+        </Typography>
       </Stack>
+
+      {loadError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          Could not load the WebAssembly engine: {loadError}. The build output is expected at{" "}
+          <code>public/wasm/sand_engine.js</code> — rebuild it with{" "}
+          <code>wasm-pack build --release --target web --no-pack --out-dir ../../public/wasm</code>{" "}
+          from <code>rust/sand-engine</code>.
+        </Alert>
+      )}
 
       <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
         <IconButton
           onClick={() => setPlaying((p) => !p)}
           color="primary"
           aria-label={playing ? "Pause" : "Play"}
+          disabled={!wasm}
         >
           {playing ? <Pause /> : <PlayArrow />}
         </IconButton>
-        <Button startIcon={<RestartAlt />} onClick={reset} size="small">
+        <Button startIcon={<RestartAlt />} onClick={reset} size="small" disabled={!wasm}>
           Restart
         </Button>
 
@@ -511,25 +599,54 @@ export default function SandView({ data }: SandViewProps) {
           }}
         />
 
-        {/* The clock, bottom right. */}
-        <Box sx={{ position: "absolute", right: 16, bottom: 14, textAlign: "right", pointerEvents: "none" }}>
-          <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", lineHeight: 1.2 }}>
-            {done ? "Finished" : `Day ${dayIndex + 1} of ${timeline.days.length}`}
-          </Typography>
-          <Typography
-            sx={{ fontSize: "1.35rem", fontWeight: 800, lineHeight: 1.15, fontVariantNumeric: "tabular-nums" }}
+        {/* Nothing can run until the wasm arrives; say so rather than showing a void. */}
+        {!wasm && !loadError && (
+          <Stack
+            spacing={1.5}
+            alignItems="center"
+            justifyContent="center"
+            sx={{ position: "absolute", inset: 0, pointerEvents: "none" }}
           >
-            {currentDay ? formatDayLong(currentDay.day) : ""}
-          </Typography>
-          {currentDay && !done && (
-            <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", lineHeight: 1.2 }}>
-              {currentDay.transitions.toLocaleString()} changing state
+            <CircularProgress size={28} />
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              Loading the WebAssembly engine…
             </Typography>
-          )}
-          <Typography sx={{ fontSize: "0.66rem", color: "text.disabled", lineHeight: 1.2 }}>
-            sim {frameMs.toFixed(1)} ms/frame
-          </Typography>
-        </Box>
+          </Stack>
+        )}
+
+        {loadError && (
+          <Stack
+            alignItems="center"
+            justifyContent="center"
+            sx={{ position: "absolute", inset: 0, px: 4, textAlign: "center" }}
+          >
+            <Typography variant="body2" sx={{ color: "error.main", fontWeight: 700 }}>
+              The WebAssembly engine failed to load, so there is nothing to simulate.
+            </Typography>
+          </Stack>
+        )}
+
+        {/* The clock, bottom right. */}
+        {wasm && !loadError && (
+          <Box sx={{ position: "absolute", right: 16, bottom: 14, textAlign: "right", pointerEvents: "none" }}>
+            <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", lineHeight: 1.2 }}>
+              {done ? "Finished" : `Day ${dayIndex + 1} of ${timeline.days.length}`}
+            </Typography>
+            <Typography
+              sx={{ fontSize: "1.35rem", fontWeight: 800, lineHeight: 1.15, fontVariantNumeric: "tabular-nums" }}
+            >
+              {currentDay ? formatDayLong(currentDay.day) : ""}
+            </Typography>
+            {currentDay && !done && (
+              <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", lineHeight: 1.2 }}>
+                {currentDay.transitions.toLocaleString()} changing state
+              </Typography>
+            )}
+            <Typography sx={{ fontSize: "0.66rem", color: "text.disabled", lineHeight: 1.2 }}>
+              sim {frameMs.toFixed(1)} ms/frame · rust/wasm
+            </Typography>
+          </Box>
+        )}
 
         {/* The payoff: once the last grain lands, say what the window amounted to. */}
         {done && (
@@ -609,7 +726,8 @@ export default function SandView({ data }: SandViewProps) {
         a pile&apos;s bulk is proportional to its job count for the whole run. A cone&apos;s
         height grows with the square root of its count — compare piles by area, or trust the
         numbers. Active sand shimmers because that work is executing; terminal sand lies still.
-        The ms/frame readout in the corner is the honest cost of full fidelity.
+        The ms/frame readout in the corner is the honest cost of full fidelity — here paid in Rust
+        rather than JavaScript, over the identical scene.
       </Typography>
     </Box>
   );

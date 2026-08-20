@@ -1,0 +1,21 @@
+[package]
+name = "sand-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Falling-sand pile automaton for the /sand-wasm job visualization"
+license = "MIT"
+publish = false
+
+[lib]
+# cdylib for the wasm artifact, rlib so `cargo test` can exercise the pure-Rust
+# core on the host target.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

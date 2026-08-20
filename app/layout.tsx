@@ -20,10 +20,8 @@ export const metadata: Metadata = {
 };
 
 const pages = [
-  { label: 'Large Grid', path: '/', icon: <PlayArrow /> },
-	{ label: 'Daily (Sankey Version)', path: '/sankey', icon: <PlayArrow /> },
-	{ label: 'Daily (Stacked Bar Version)', path: '/stacked-bar', icon: <PlayArrow /> },
-
+	{ label: 'Days', path: '/days', icon: <PlayArrow /> },
+	{ label: 'Sand', path: '/sand-wasm', icon: <PlayArrow /> }
 ]
 
 export default function RootLayout({

@@ -90,28 +90,68 @@ export function buildTimeline(data: DayData, cluster: string = ALL_CLUSTERS): Ti
   };
 }
 
-/**
- * Jobs represented by one grain.
- *
- * Sized per bucket rather than globally: Completed accumulates every job that ever
- * finished and Placed peaks at its largest backlog, and those two peak against
- * differently-sized containers. Taking the worst ratio means whichever bucket is
- * tightest ends near full and none of them overflow — a single global scale would
- * fit Completed comfortably while quietly overrunning Placed.
- */
-export function jobsPerGrain(
-  timeline: Timeline,
-  capacityCells: { completed: number; placed: number; removed: number },
-): number {
-  const fill = 0.88;
-  const need = Math.max(
-    timeline.totals.completed / (capacityCells.completed * fill),
-    timeline.totals.peakBacklog / (capacityCells.placed * fill),
-    timeline.totals.removed / (capacityCells.removed * fill),
-    1,
-  );
-  return Math.max(1, Math.ceil(need));
+/** How many jobs sit in each state at one instant. Conserved: nothing vanishes. */
+export interface Census {
+  placed: number;
+  active: number;
+  completed: number;
+  removed: number;
 }
+
+/**
+ * The census at the START of a given day, from the opening backlog plus every
+ * earlier day's flows. This is the seek target for the scrubber and the ground
+ * truth for the labels under the piles: each state's count moves only by the
+ * transitions that actually touch it, so a job that went placed -> active ->
+ * removed is subtracted exactly once from each pile it left.
+ */
+export function censusAt(timeline: Timeline, dayIndex: number): Census {
+  const initial = timeline.initial ?? { placed: 0, active: 0 };
+  const census: Census = { placed: initial.placed, active: initial.active, completed: 0, removed: 0 };
+  for (let i = 0; i < dayIndex && i < timeline.days.length; i++) {
+    applyDay(census, timeline.days[i], 1);
+  }
+  census.placed = Math.max(0, census.placed);
+  census.active = Math.max(0, census.active);
+  return census;
+}
+
+/** Advance a census by `fraction` of one day's flows, in place. */
+export function applyDay(census: Census, day: DayEmission, fraction: number): void {
+  census.placed +=
+    (day.placedNew - day.placedToActive - day.placedToRemoved - day.placedToCompleted) * fraction;
+  census.active += (day.placedToActive - day.activeToCompleted - day.activeToRemoved) * fraction;
+  census.completed += (day.activeToCompleted + day.placedToCompleted) * fraction;
+  census.removed += (day.activeToRemoved + day.placedToRemoved) * fraction;
+}
+
+/**
+ * The largest census each state ever reaches across the window. Known before
+ * playback starts, so the world can give every pile a lane wide enough for its
+ * biggest day -- the pile-equals-census contract then holds for the whole run
+ * with no rescaling and no overflow.
+ */
+export function peakCensus(timeline: Timeline): Census {
+  const census = censusAt(timeline, 0);
+  const peak: Census = {
+    placed: Math.max(0, census.placed),
+    active: Math.max(0, census.active),
+    completed: census.completed,
+    removed: census.removed,
+  };
+  for (const day of timeline.days) {
+    applyDay(census, day, 1);
+    peak.placed = Math.max(peak.placed, census.placed);
+    peak.active = Math.max(peak.active, census.active);
+    peak.completed = Math.max(peak.completed, census.completed);
+    peak.removed = Math.max(peak.removed, census.removed);
+  }
+  return peak;
+}
+
+// One grain IS one job -- no binning. The GrainMeter below still matters even at
+// 1:1: a day's flows are emitted in per-frame fractions, and the meter is what
+// turns those fractions into whole grains without losing the remainder.
 
 /**
  * Converts a fractional stream of jobs into whole grains without losing the

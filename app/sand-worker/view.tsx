@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Box,
   Button,
+  Chip,
   IconButton,
   MenuItem,
   Paper,
@@ -22,176 +24,151 @@ import FitScreen from "@mui/icons-material/FitScreen";
 
 import type { DayData } from "../sankey/types";
 import { ALL_CLUSTERS, formatDayLong, formatDayShort } from "../sankey/_components/dayModel";
-import {
-  PileEngine,
-  SAND_ACTIVE,
-  SAND_COMPLETED,
-  SAND_PLACED,
-  SAND_REMOVED,
-  type LaneInput,
-  type SandMaterial,
-} from "./_components/pileEngine";
-import {
-  GrainMeter,
-  applyDay,
-  buildTimeline,
-  censusAt,
-  daySeconds,
-  peakCensus,
-  type Census,
-} from "./_components/timeline";
-
-/** Lifecycle order, left to right; most transitions read as rightward moves. */
-const LANES: { id: keyof Census; label: string; material: SandMaterial }[] = [
-  { id: "placed", label: "Placed", material: SAND_PLACED },
-  { id: "active", label: "Active", material: SAND_ACTIVE },
-  { id: "completed", label: "Completed", material: SAND_COMPLETED },
-  { id: "removed", label: "Removed", material: SAND_REMOVED },
-];
+import { buildTimeline, censusAt, type Census } from "../sand/_components/timeline";
+import type { CameraState, MainMessage, WorkerMessage } from "./_components/protocol";
 
 const CANVAS_HEIGHT = 560;
 const SPEEDS = [0.5, 1, 2, 4];
 const MAX_ZOOM = 12;
+/**
+ * How long teardown waits before killing the worker. A canvas element can hand
+ * over control to an OffscreenCanvas exactly once, so the worker cannot be
+ * rebuilt for an element that already transferred; React StrictMode's
+ * development unmount/remount must therefore be able to reclaim the same worker.
+ */
+const TEARDOWN_DELAY_MS = 400;
 
-interface Camera {
-  /** World coordinates at the viewport centre. */
-  cx: number;
-  cy: number;
-  /** Screen pixels per world cell. */
-  zoom: number;
-}
+const ZERO_CENSUS: Census = { placed: 0, active: 0, completed: 0, removed: 0 };
 
-interface SandViewProps {
+interface SandWorkerViewProps {
   data: DayData;
 }
 
-export default function SandView({ data }: SandViewProps) {
+/**
+ * The /sand visualization with the simulation and all of its drawing moved into a
+ * Web Worker. The main thread keeps the DOM half of the job -- pointer and wheel
+ * input, camera arithmetic, the React chrome -- and hands the canvas itself over
+ * with transferControlToOffscreen(), so painting a frame never touches it.
+ *
+ * The page exists to be compared with /sand side by side, which is why it reports
+ * two numbers: what a frame costs the worker (the same measurement /sand prints)
+ * and how the main thread's own animation clock is doing while that happens.
+ */
+export default function SandWorkerView({ data }: SandWorkerViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const spinnerRef = useRef<HTMLDivElement | null>(null);
   const [cluster, setCluster] = useState<string>(ALL_CLUSTERS);
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState(1);
   const [dayIndex, setDayIndex] = useState(0);
   const [done, setDone] = useState(false);
-  const [totals, setTotals] = useState<Census>({ placed: 0, active: 0, completed: 0, removed: 0 });
-  /** Smoothed simulation+render cost per frame, for judging fidelity trade-offs. */
-  const [frameMs, setFrameMs] = useState(0);
+  const [totals, setTotals] = useState<Census>(ZERO_CENSUS);
+  /** Worker-side automaton + pixel work per frame, smoothed. Same metric as /sand. */
+  const [simMs, setSimMs] = useState(0);
+  /** The worker's whole frame, including day emission, smoothed. */
+  const [workerFrameMs, setWorkerFrameMs] = useState(0);
+  /** Main-thread animation-frame interval, smoothed: the responsiveness number. */
+  const [mainFrameMs, setMainFrameMs] = useState(0);
+  const [fatal, setFatal] = useState<string | null>(null);
 
   const timeline = useMemo(() => buildTimeline(data, cluster), [data, cluster]);
-  const peaks = useMemo(() => peakCensus(timeline), [timeline]);
   const peakActivity = useMemo(
     () => Math.max(1, ...timeline.days.map((d) => d.placedNew + d.transitions)),
     [timeline],
   );
 
-  // Everything the animation loop mutates lives in refs: re-rendering React 60
-  // times a second to move sand would cost more than the simulation itself.
-  const engineRef = useRef<PileEngine | null>(null);
-  const metersRef = useRef<Record<string, GrainMeter>>({});
+  const workerRef = useRef<Worker | null>(null);
+  const teardownRef = useRef<number | null>(null);
   /**
-   * Grains owed to a destination but not yet moved: remove() can only vanish
-   * sand that has actually settled, and Active is a pass-through whose grains
-   * are often still mid-air when the data says they finish. The shortfall is
-   * carried to the next frame and paid off as sand lands.
+   * Bumped whenever the main thread changes what the worker should be showing (a
+   * new timeline, or a seek). The worker echoes the newest generation it has acted
+   * on, so UI packets that were already in flight across a seek are dropped rather
+   * than flicking the day readout backwards.
    */
-  const pendingRef = useRef<Record<string, number>>({});
-  const progressRef = useRef(0);
-  const dayRef = useRef(0);
-  /**
-   * The live job census, advanced by the same flow numbers that drive the sand.
-   * This -- not grain arithmetic -- is what the labels print, so a pile's number
-   * is exact even though its height is quantised.
-   */
-  const censusRef = useRef<Census>({ placed: 0, active: 0, completed: 0, removed: 0 });
-  const cameraRef = useRef<Camera>({ cx: 0, cy: 0, zoom: 1 });
+  const genRef = useRef(0);
+  const cameraRef = useRef<CameraState>({ cx: 0, cy: 0, zoom: 1 });
   /** Camera actions the toolbar buttons call into; owned by the canvas effect. */
   const cameraControlsRef = useRef<{ zoomBy: (f: number) => void; fit: () => void } | null>(null);
-  const playingRef = useRef(playing);
-  const speedRef = useRef(speed);
-  playingRef.current = playing;
-  speedRef.current = speed;
 
-  /**
-   * Jump to the start of a day: each pile's census is stamped as an already-
-   * settled cone and playback resumes from there. Day 0's census is the opening
-   * backlog, so reset is just seekTo(0) -- the scene opens with the piles the
-   * data says already existed.
-   */
+  const post = useCallback((message: MainMessage) => {
+    workerRef.current?.postMessage(message);
+  }, []);
+
   const seekTo = useCallback(
     (target: number) => {
-      const engine = engineRef.current;
-      if (!engine) return;
       const clamped = Math.max(0, Math.min(target, timeline.days.length - 1));
-      const census = censusAt(timeline, clamped);
-      engine.clearSand();
-      for (const lane of LANES) {
-        // One grain per job: the stamped pile IS the census.
-        const grains = Math.round(census[lane.id]);
-        if (grains > 0) engine.stamp(lane.id, grains, lane.material);
-      }
-      metersRef.current = Object.fromEntries(
-        ["placedNew", "placedToActive", "placedToRemoved", "placedToCompleted", "activeToCompleted", "activeToRemoved"].map(
-          (key) => [key, new GrainMeter(1)],
-        ),
-      );
-      pendingRef.current = {
-        placedToActive: 0,
-        placedToRemoved: 0,
-        placedToCompleted: 0,
-        activeToCompleted: 0,
-        activeToRemoved: 0,
-      };
-      progressRef.current = 0;
-      dayRef.current = clamped;
-      censusRef.current = { ...census };
+      genRef.current += 1;
+      post({ type: "seek", gen: genRef.current, dayIndex: clamped });
+      // Show the destination immediately; the worker's next packet confirms it.
       setDayIndex(clamped);
       setDone(false);
-      setTotals({ ...census });
+      setTotals(censusAt(timeline, clamped));
     },
-    [timeline],
+    [post, timeline],
   );
 
   const reset = useCallback(() => seekTo(0), [seekTo]);
 
+  // --- Worker, canvas transfer and camera input ------------------------------
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // --- World -----------------------------------------------------------
-    const laneInputs: LaneInput[] = LANES.map((lane) => ({
-      ...lane,
-      peakGrains: Math.ceil(peaks[lane.id]),
-    }));
-    const engine = new PileEngine(laneInputs);
-    engineRef.current = engine;
+    // A remount inside the teardown window reclaims the existing worker.
+    if (teardownRef.current !== null) {
+      window.clearTimeout(teardownRef.current);
+      teardownRef.current = null;
+    }
 
-    const worldW = engine.width;
-    const worldH = engine.height;
-    const worldCanvas = document.createElement("canvas");
-    worldCanvas.width = worldW;
-    worldCanvas.height = worldH;
-    const worldCtx = worldCanvas.getContext("2d", { alpha: false });
-    const ctx = canvas.getContext("2d", { alpha: false });
-    if (!worldCtx || !ctx) return;
-    // Shares the engine's own pixel memory: the engine paints cells as they
-    // change, and each frame uploads only the dirty rectangle.
-    const worldImage = new ImageData(engine.pixelBytes, worldW, worldH);
+    if (typeof Worker === "undefined" || typeof canvas.transferControlToOffscreen !== "function") {
+      setFatal(
+        "This browser does not support OffscreenCanvas transfer to a Web Worker, so the " +
+          "off-thread variant cannot run. The main-thread version at /sand shows the same scene.",
+      );
+      return;
+    }
 
-    // --- Camera ------------------------------------------------------------
     const dpr = window.devicePixelRatio || 1;
     let cssW = canvas.clientWidth || 800;
     const cssH = CANVAS_HEIGHT;
-    const fitZoom = () => Math.min(cssW / worldW, cssH / worldH);
+
+    let worker = workerRef.current;
+    if (!worker) {
+      let created: Worker;
+      try {
+        created = new Worker(new URL("./_components/sand.worker.ts", import.meta.url), {
+          type: "module",
+        });
+      } catch {
+        setFatal("The simulation worker could not be started.");
+        return;
+      }
+      worker = created;
+      workerRef.current = created;
+      const offscreen = canvas.transferControlToOffscreen();
+      const init: MainMessage = { type: "init", canvas: offscreen, cssW, cssH, dpr };
+      created.postMessage(init, [offscreen]);
+    }
+    const send = (message: MainMessage) => worker.postMessage(message);
+
+    // --- Camera -------------------------------------------------------------
+    // World geometry is not known until the worker has built the engine; until
+    // then the camera maths is harmlessly clamped against a 1x1 world.
+    const dims = { w: 1, h: 1 };
     const camera = cameraRef.current;
+    const fitZoom = () => Math.min(cssW / dims.w, cssH / dims.h);
+    const pushCamera = () => send({ type: "camera", camera: { ...camera } });
 
     const clampCamera = () => {
       camera.zoom = Math.max(fitZoom() * 0.9, Math.min(MAX_ZOOM, camera.zoom));
-      camera.cx = Math.max(0, Math.min(worldW, camera.cx));
-      camera.cy = Math.max(0, Math.min(worldH, camera.cy));
+      camera.cx = Math.max(0, Math.min(dims.w, camera.cx));
+      camera.cy = Math.max(0, Math.min(dims.h, camera.cy));
     };
     const fit = () => {
       camera.zoom = fitZoom();
-      camera.cx = worldW / 2;
-      camera.cy = worldH / 2;
+      camera.cx = dims.w / 2;
+      camera.cy = dims.h / 2;
+      pushCamera();
     };
     const zoomAt = (factor: number, screenX: number, screenY: number) => {
       const before = camera.zoom;
@@ -203,20 +180,47 @@ export default function SandView({ data }: SandViewProps) {
       camera.cx = wx - (screenX - cssW / 2) / (before * scale);
       camera.cy = wy - (screenY - cssH / 2) / (before * scale);
       clampCamera();
+      pushCamera();
     };
     cameraControlsRef.current = {
       zoomBy: (f) => zoomAt(f, cssW / 2, cssH / 2),
       fit,
     };
 
+    const onMessage = (event: MessageEvent<WorkerMessage>) => {
+      const message = event.data;
+      if (message.type === "error") {
+        setFatal(message.message);
+        return;
+      }
+      if (message.type === "world") {
+        dims.w = message.worldW;
+        dims.h = message.worldH;
+        fit();
+        return;
+      }
+      if (message.gen !== genRef.current) return;
+      setDayIndex(message.dayIndex);
+      setDone(message.done);
+      setTotals(message.census);
+      setSimMs(message.simMs);
+      setWorkerFrameMs(message.frameMs);
+    };
+    worker.addEventListener("message", onMessage);
+
+    // The bitmap belongs to the worker now: only it may resize the canvas, so a
+    // layout change is reported rather than applied here.
     const resize = () => {
       cssW = canvas.clientWidth || cssW;
-      canvas.width = Math.round(cssW * dpr);
-      canvas.height = Math.round(cssH * dpr);
-      clampCamera();
+      send({ type: "resize", cssW, cssH, dpr });
+      // ResizeObserver fires once on observe, which can beat the worker's world
+      // message; clamping against the placeholder 1x1 world would push a nonsense
+      // camera. The world message fits the camera itself once it lands.
+      if (dims.w > 1) {
+        clampCamera();
+        pushCamera();
+      }
     };
-    resize();
-    fit();
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
 
@@ -240,6 +244,7 @@ export default function SandView({ data }: SandViewProps) {
       camera.cy -= (event.clientY - lastPointer.y) / camera.zoom;
       lastPointer = { x: event.clientX, y: event.clientY };
       clampCamera();
+      pushCamera();
     };
     const onPointerUp = () => {
       dragging = false;
@@ -249,181 +254,107 @@ export default function SandView({ data }: SandViewProps) {
     canvas.addEventListener("pointerup", onPointerUp);
     canvas.addEventListener("pointercancel", onPointerUp);
 
-    // --- Playback ----------------------------------------------------------
-    seekTo(0);
-
-    let raf = 0;
-    let last = performance.now();
-    let uiClock = 0;
-    let tick = 0;
-    let frameCost = 0;
-
-    const emitFor = (fraction: number) => {
-      const day = timeline.days[dayRef.current];
-      if (!day) return;
-      const meters = metersRef.current;
-      const pending = pendingRef.current;
-
-      // New work rains into Placed.
-      const pour = meters.placedNew.take(day.placedNew * fraction);
-      if (pour > 0) engine.drop("placed", pour, SAND_PLACED);
-
-      // Transitions: vanish off the source summit, drop into the destination.
-      // Queue what this frame owes, then pay down what the source can supply.
-      const owe = (channel: string, jobs: number) => {
-        pending[channel] += meters[channel].take(jobs);
-      };
-      const pay = (channel: string, from: string, to: string, material: SandMaterial) => {
-        if (pending[channel] <= 0) return;
-        const taken = engine.remove(from, pending[channel]);
-        if (taken > 0) {
-          engine.drop(to, taken, material);
-          pending[channel] -= taken;
-        }
-      };
-
-      owe("placedToActive", day.placedToActive * fraction);
-      owe("placedToRemoved", day.placedToRemoved * fraction);
-      owe("placedToCompleted", day.placedToCompleted * fraction);
-      owe("activeToCompleted", day.activeToCompleted * fraction);
-      owe("activeToRemoved", day.activeToRemoved * fraction);
-
-      pay("placedToActive", "placed", "active", SAND_ACTIVE);
-      pay("placedToRemoved", "placed", "removed", SAND_REMOVED);
-      pay("placedToCompleted", "placed", "completed", SAND_COMPLETED);
-      pay("activeToCompleted", "active", "completed", SAND_COMPLETED);
-      pay("activeToRemoved", "active", "removed", SAND_REMOVED);
-
-      // Job counts come from the data, not grain counts, so the readout stays
-      // exact even though the sand is quantised.
-      applyDay(censusRef.current, day, fraction);
-    };
-
-    const frame = (now: number) => {
-      raf = requestAnimationFrame(frame);
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      tick++;
-
-      if (playingRef.current && dayRef.current < timeline.days.length) {
-        // Activity-paced: a dead day flicks past, a million-job day lingers.
-        const perDay = daySeconds(timeline.days[dayRef.current]) / speedRef.current;
-        const chunk = Math.min(dt / perDay, 1 - progressRef.current);
-        if (chunk > 0) emitFor(chunk);
-        progressRef.current += chunk;
-        // The calendar waits for the physics: a day ends only once its last
-        // grain has landed AND every pile has stopped moving. Pending debts are
-        // deliberately not part of the gate -- with nothing falling and nothing
-        // moving they are momentarily unpayable, and the next day's arrivals
-        // are what pays them.
-        if (
-          progressRef.current >= 1 &&
-          engine.inFlight === 0 &&
-          engine.movesLastStep === 0
-        ) {
-          progressRef.current = 0;
-          dayRef.current++;
-        }
-      }
-
-      const simStart = performance.now();
-      engine.step(tick);
-      const dirtyRect = engine.consumeDirty();
-      if (dirtyRect) {
-        worldCtx.putImageData(worldImage, 0, 0, dirtyRect.x, dirtyRect.y, dirtyRect.w, dirtyRect.h);
-      }
-
-      // Viewport blit: nearest-neighbour so grains stay hard squares at any zoom.
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = "#eceae4";
-      ctx.fillRect(0, 0, cssW, cssH);
-      ctx.imageSmoothingEnabled = false;
-      const { cx, cy, zoom } = camera;
-      const sx = cx - cssW / (2 * zoom);
-      const sy = cy - cssH / (2 * zoom);
-      const vx0 = Math.max(0, sx);
-      const vy0 = Math.max(0, sy);
-      const vx1 = Math.min(worldW, sx + cssW / zoom);
-      const vy1 = Math.min(worldH, sy + cssH / zoom);
-      if (vx1 > vx0 && vy1 > vy0) {
-        ctx.drawImage(
-          worldCanvas,
-          vx0,
-          vy0,
-          vx1 - vx0,
-          vy1 - vy0,
-          (vx0 - sx) * zoom,
-          (vy0 - sy) * zoom,
-          (vx1 - vx0) * zoom,
-          (vy1 - vy0) * zoom,
-        );
-      }
-
-      // Lane labels on the screen layer: crisp at any zoom, tracking their pile.
-      const census = censusRef.current;
-      ctx.textAlign = "center";
-      for (const lane of engine.lanes) {
-        const screenX = ((lane.x0 + lane.x1) / 2 - sx) * zoom;
-        if (screenX < -60 || screenX > cssW + 60) continue;
-        const screenY = Math.min((engine.groundY - sy) * zoom + 16, cssH - 22);
-        ctx.fillStyle = "#3d3a33";
-        ctx.font = "700 12px system-ui, sans-serif";
-        ctx.fillText(lane.label, screenX, screenY);
-        ctx.fillStyle = "#6e6a60";
-        ctx.font = "11px system-ui, sans-serif";
-        ctx.fillText(
-          Math.max(0, Math.round(census[lane.id as keyof Census])).toLocaleString(),
-          screenX,
-          screenY + 14,
-        );
-      }
-
-      // Exponentially smoothed frame cost: the number to look at when deciding
-      // which fidelity compromises are worth making.
-      frameCost = frameCost * 0.9 + (performance.now() - simStart) * 0.1;
-
-      // Throttle React updates to ~8/s; the canvas is already current.
-      uiClock += dt;
-      if (uiClock > 0.12) {
-        uiClock = 0;
-        setDayIndex(Math.min(dayRef.current, timeline.days.length - 1));
-        setDone(dayRef.current >= timeline.days.length && engine.inFlight === 0);
-        setTotals({ ...censusRef.current });
-        setFrameMs(frameCost);
-      }
-    };
-
-    raf = requestAnimationFrame(frame);
     return () => {
-      cancelAnimationFrame(raf);
+      worker.removeEventListener("message", onMessage);
       observer.disconnect();
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
-      engineRef.current = null;
       cameraControlsRef.current = null;
+      teardownRef.current = window.setTimeout(() => {
+        teardownRef.current = null;
+        const dying = workerRef.current;
+        workerRef.current = null;
+        if (dying) {
+          dying.postMessage({ type: "stop" } satisfies MainMessage);
+          dying.terminate();
+        }
+      }, TEARDOWN_DELAY_MS);
     };
-  }, [timeline, peaks, seekTo]);
+  }, []);
+
+  // A new timeline (cluster change) rebuilds the world inside the same worker.
+  useEffect(() => {
+    genRef.current += 1;
+    post({ type: "timeline", gen: genRef.current, timeline });
+    setDayIndex(0);
+    setDone(false);
+    setTotals(censusAt(timeline, 0));
+  }, [post, timeline]);
+
+  useEffect(() => {
+    post({ type: "playing", playing });
+  }, [playing, post]);
+
+  useEffect(() => {
+    post({ type: "speed", speed });
+  }, [post, speed]);
+
+  // --- Main-thread responsiveness -------------------------------------------
+  // The point of the page. This loop does nothing but time itself and nudge a
+  // spinner, so its frame interval is a direct read on how much room the main
+  // thread has left. On /sand the same loop would be sharing that thread with the
+  // whole simulation.
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    let smoothed = 1000 / 60;
+    let sinceReport = 0;
+    let angle = 0;
+
+    const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
+      const delta = now - last;
+      last = now;
+      if (delta > 0 && delta < 1000) smoothed = smoothed * 0.9 + delta * 0.1;
+      angle = (angle + delta * 0.18) % 360;
+      const spinner = spinnerRef.current;
+      if (spinner) spinner.style.transform = `rotate(${angle.toFixed(1)}deg)`;
+      sinceReport += delta;
+      if (sinceReport > 250) {
+        sinceReport = 0;
+        setMainFrameMs(smoothed);
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   const currentDay = timeline.days[Math.min(dayIndex, timeline.days.length - 1)];
   const totalFinished = totals.completed + totals.removed;
   const completedShare = totalFinished > 0 ? (totals.completed / totalFinished) * 100 : 0;
+  const mainFps = mainFrameMs > 0 ? 1000 / mainFrameMs : 0;
 
   return (
     <Box component="main" sx={{ px: { xs: 2, md: 4 }, py: { xs: 3, md: 4 }, maxWidth: 1180, mx: "auto" }}>
       <Stack spacing={0.5} sx={{ mb: 2.5 }}>
-        <Typography variant="h4" component="h1" sx={{ fontWeight: 700 }}>
-          {data.owner}&apos;s jobs, as sand
-        </Typography>
+        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Typography variant="h4" component="h1" sx={{ fontWeight: 700 }}>
+            {data.owner}&apos;s jobs, as sand
+          </Typography>
+          <Chip label="Web Worker variant" color="primary" size="small" />
+        </Stack>
         <Typography variant="body1" sx={{ color: "text.secondary" }}>
           Four piles, one per state, and <strong>every grain is one job</strong> — a pile holds
           exactly the jobs in that state right now. When a job changes state its grain vanishes
           from the old pile and drops into the new one. Scroll to zoom, drag to pan, click the
           strip below to jump to a day.
         </Typography>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          Same scene as <strong>/sand</strong>, but the simulation and every pixel of it run inside
+          a Web Worker that owns the canvas outright. Compare the two readouts in the corner with
+          the ones on that page: the worker&apos;s cost per frame should be about the same, while
+          the main thread here stays near 60 fps instead of being spent on sand.
+        </Typography>
       </Stack>
+
+      {fatal && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {fatal}
+        </Alert>
+      )}
 
       <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
         <IconButton
@@ -511,6 +442,52 @@ export default function SandView({ data }: SandViewProps) {
           }}
         />
 
+        {/*
+          The two measurements, top left. The worker number is the same one /sand
+          prints; the main-thread number is what moving the work bought. The square
+          is spun by the main thread's own animation frames, so it stutters exactly
+          when that thread is busy -- the readout, visible.
+        */}
+        <Paper
+          elevation={0}
+          sx={{
+            position: "absolute",
+            left: 12,
+            top: 12,
+            px: 1.25,
+            py: 0.75,
+            backgroundColor: "rgba(255,255,255,0.82)",
+            border: "1px solid rgba(0,0,0,0.08)",
+            pointerEvents: "none",
+          }}
+        >
+          <Stack direction="row" spacing={1.25} alignItems="center">
+            <Box
+              ref={spinnerRef}
+              sx={{ width: 12, height: 12, backgroundColor: "primary.main", borderRadius: "2px" }}
+            />
+            <Box>
+              <Typography
+                sx={{ fontSize: "0.7rem", lineHeight: 1.35, fontVariantNumeric: "tabular-nums" }}
+              >
+                worker sim <strong>{simMs.toFixed(1)} ms/frame</strong>
+                <Box component="span" sx={{ color: "text.disabled" }}>
+                  {" "}
+                  (whole worker frame {workerFrameMs.toFixed(1)} ms)
+                </Box>
+              </Typography>
+              <Typography
+                sx={{ fontSize: "0.7rem", lineHeight: 1.35, fontVariantNumeric: "tabular-nums" }}
+              >
+                main thread{" "}
+                <strong>
+                  {mainFps.toFixed(0)} fps ({mainFrameMs.toFixed(1)} ms/frame)
+                </strong>
+              </Typography>
+            </Box>
+          </Stack>
+        </Paper>
+
         {/* The clock, bottom right. */}
         <Box sx={{ position: "absolute", right: 16, bottom: 14, textAlign: "right", pointerEvents: "none" }}>
           <Typography sx={{ fontSize: "0.7rem", color: "text.secondary", lineHeight: 1.2 }}>
@@ -526,9 +503,6 @@ export default function SandView({ data }: SandViewProps) {
               {currentDay.transitions.toLocaleString()} changing state
             </Typography>
           )}
-          <Typography sx={{ fontSize: "0.66rem", color: "text.disabled", lineHeight: 1.2 }}>
-            sim {frameMs.toFixed(1)} ms/frame
-          </Typography>
         </Box>
 
         {/* The payoff: once the last grain lands, say what the window amounted to. */}
@@ -604,12 +578,14 @@ export default function SandView({ data }: SandViewProps) {
       </Box>
 
       <Typography variant="caption" component="p" sx={{ color: "text.secondary", mt: 2, display: "block" }}>
-        Falling-sand cellular automaton at one job per grain, every grain simulated — no binning,
-        no culling. Each lane is sized up front for the largest census its state ever reaches, so
-        a pile&apos;s bulk is proportional to its job count for the whole run. A cone&apos;s
-        height grows with the square root of its count — compare piles by area, or trust the
-        numbers. Active sand shimmers because that work is executing; terminal sand lies still.
-        The ms/frame readout in the corner is the honest cost of full fidelity.
+        Same falling-sand automaton as <strong>/sand</strong> — one job per grain, every grain
+        simulated, no binning and no culling — but the engine, the world&apos;s pixel buffer, the
+        camera blit and the lane labels all live in a Web Worker drawing into a canvas whose
+        control this page transferred to it. The main thread only translates pointers into camera
+        state and paints the chrome, which is why its frame clock stays clear while several
+        million grains are in play. Nothing is shared memory: the site is a static export, so the
+        headers that would allow it are not available, and the only per-frame traffic in either
+        direction is a handful of small messages.
       </Typography>
     </Box>
   );

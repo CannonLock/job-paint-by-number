@@ -1,0 +1,35 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_sandengine_free: (a: number, b: number) => void;
+export const materials: () => [number, number];
+export const sandengine_cell_count: (a: number) => number;
+export const sandengine_cells_ptr: (a: number) => number;
+export const sandengine_clear_sand: (a: number) => void;
+export const sandengine_consume_dirty: (a: number) => number;
+export const sandengine_dirty_h: (a: number) => number;
+export const sandengine_dirty_w: (a: number) => number;
+export const sandengine_dirty_x: (a: number) => number;
+export const sandengine_dirty_y: (a: number) => number;
+export const sandengine_drop_grains: (a: number, b: number, c: number, d: number) => void;
+export const sandengine_ground_y: (a: number) => number;
+export const sandengine_height: (a: number) => number;
+export const sandengine_in_flight: (a: number) => number;
+export const sandengine_lane_count: (a: number) => number;
+export const sandengine_lane_material: (a: number, b: number) => number;
+export const sandengine_lane_x0: (a: number, b: number) => number;
+export const sandengine_lane_x1: (a: number, b: number) => number;
+export const sandengine_moves_last_step: (a: number) => number;
+export const sandengine_new: (a: number, b: number, c: number, d: number, e: number) => number;
+export const sandengine_overflow: (a: number) => number;
+export const sandengine_pixel_bytes: (a: number) => number;
+export const sandengine_pixels_ptr: (a: number) => number;
+export const sandengine_remove: (a: number, b: number, c: number) => number;
+export const sandengine_settled_in: (a: number, b: number) => number;
+export const sandengine_stamp: (a: number, b: number, c: number, d: number) => void;
+export const sandengine_step: (a: number, b: number) => void;
+export const sandengine_width: (a: number) => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_start: () => void;

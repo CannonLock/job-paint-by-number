@@ -1,0 +1,4 @@
+# Cargo build output. The shipped artifacts live in public/wasm/, produced by
+#   cd rust/sand-engine
+#   wasm-pack build --release --target web --no-pack --out-dir ../../public/wasm
+target/
