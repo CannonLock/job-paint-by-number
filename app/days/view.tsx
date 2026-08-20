@@ -368,18 +368,6 @@ export default function DaysView({ data, dayData }: DaysViewProps) {
           </Box>
         </Stack>
 
-        {/* The guide opens by itself once; after that it needs a door. */}
-        <Box>
-          <Button
-            size="small"
-            variant="text"
-            startIcon={<HelpOutline />}
-            onClick={() => setGuideOpen(true)}
-          >
-            How to read a day
-          </Button>
-        </Box>
-
         <JobCalendar
           slices={slices}
           censuses={censuses}
@@ -394,6 +382,22 @@ export default function DaysView({ data, dayData }: DaysViewProps) {
           onActiveStartDateChange={setActiveStartDate}
           onSelectDay={setOpenDay}
         />
+
+        {/*
+          Under the calendar, not above it. The guide opens by itself on a first
+          visit, so this is the way back to it -- and a reader who wants it again
+          is one who has just been looking at the grid, not one on their way to it.
+        */}
+        <Box>
+          <Button
+            size="small"
+            variant="text"
+            startIcon={<HelpOutline />}
+            onClick={() => setGuideOpen(true)}
+          >
+            How to read a day
+          </Button>
+        </Box>
       </Stack>
 
       <CellGuideDialog
