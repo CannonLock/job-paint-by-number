@@ -8,7 +8,8 @@ import "react-calendar/dist/Calendar.css";
 
 import type { BarScale } from "../types";
 import {
-  QUEUE_HEIGHT_CAP,
+  QUEUE_ABOVE,
+  QUEUE_BELOW,
   TILE_BARS_HEIGHT,
   buildScaleTicks,
   type DayActivity,
@@ -111,10 +112,11 @@ export default function JobCalendar({
     [censuses, peakBinTotal, scale],
   );
 
-  // The queue markers' own scale, on the right. Capped exactly as the bars are, so
-  // a label sits at the height the value it names is actually drawn at.
+  // The queue markers' own scale, on the right. Built the same way as the activity
+  // scale, so both put their top tick at the top of the slot and a bar at full
+  // height means "the top of this scale" whichever kind of bar it is.
   const queueTicks = useMemo(
-    () => (activities ? buildScaleTicks(queuePeak, scale, QUEUE_HEIGHT_CAP) : []),
+    () => (activities ? buildScaleTicks(queuePeak, scale) : []),
     [activities, queuePeak, scale],
   );
 
@@ -284,8 +286,8 @@ export default function JobCalendar({
               {queueTicks.length > 0 && (
                 <TileAxis
                   ticks={queueTicks}
-                  height={BARS_SLOT}
-                  bottom={AXIS_BOTTOM}
+                  height={QUEUE_SLOT}
+                  bottom={QUEUE_BOTTOM}
                   side="right"
                   unit="count"
                   highlighted={hoveredScale === "queue"}
@@ -317,8 +319,8 @@ export default function JobCalendar({
                   nextDay={slices.has(nextKey) ? nextKey : null}
                   peak={queuePeak}
                   scale={scale}
-                  height={BARS_SLOT}
-                  bottom={AXIS_BOTTOM}
+                  height={QUEUE_SLOT}
+                  bottom={QUEUE_BOTTOM}
                   onHoverScale={setHoveredScale}
                 />
               )}
@@ -349,6 +351,10 @@ const CAPTION_LINE = 14;
  * caption, the gap above it, and the tile's own bottom padding.
  */
 const AXIS_BOTTOM = TILE_PAD_Y + CAPTION_LINE + TILE_GAP;
+
+/** The queue marker's full vertical range, bar and axis alike. See QUEUE_BELOW. */
+const QUEUE_SLOT = BARS_SLOT + QUEUE_BELOW + QUEUE_ABOVE;
+const QUEUE_BOTTOM = AXIS_BOTTOM - QUEUE_BELOW;
 
 const TILE_CAPTION = {
   fontSize: "0.64rem",

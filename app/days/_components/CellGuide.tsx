@@ -16,7 +16,13 @@ import {
 } from "@mui/material";
 import Close from "@mui/icons-material/Close";
 
-import { QUEUE_HEIGHT_CAP, barFraction, buildScaleTicks } from "./binModel";
+import {
+  QUEUE_ABOVE,
+  QUEUE_BELOW,
+  TILE_BARS_HEIGHT,
+  barFraction,
+  buildScaleTicks,
+} from "./binModel";
 import { compactNumber } from "./dayCards";
 import {
   ACTIVITY_ORDER,
@@ -139,17 +145,25 @@ const EXAMPLE_QUEUE_TOTAL = EXAMPLE_QUEUE.carried + EXAMPLE_QUEUE.fromToday;
  * the real functions, so the example cannot drift from what the calendar does.
  */
 const EXAMPLE_QUEUE_PEAK = 8400;
-const EXAMPLE_QUEUE_FRACTION =
-  barFraction(EXAMPLE_QUEUE_TOTAL, EXAMPLE_QUEUE_PEAK, "linear") *
-  QUEUE_HEIGHT_CAP;
-const EXAMPLE_QUEUE_TICKS = buildScaleTicks(
+const EXAMPLE_QUEUE_FRACTION = barFraction(
+  EXAMPLE_QUEUE_TOTAL,
   EXAMPLE_QUEUE_PEAK,
   "linear",
-  QUEUE_HEIGHT_CAP,
 );
+const EXAMPLE_QUEUE_TICKS = buildScaleTicks(EXAMPLE_QUEUE_PEAK, "linear");
 
 /** Width the example reserves for the queue scale hanging off its right. */
 const RIGHT_GUTTER = 56;
+
+/**
+ * How far the example's queue marker reaches past the slot: the calendar's own
+ * overshoot, scaled to this larger example. Derived from the real constants rather
+ * than restated, so the illustration cannot drift from the geometry it illustrates.
+ * The marker is drawn over a taller range than the day bars on purpose -- see
+ * QUEUE_BELOW.
+ */
+const EX_QUEUE_BELOW = Math.round((QUEUE_BELOW / TILE_BARS_HEIGHT) * SLOT_HEIGHT);
+const EX_QUEUE_ABOVE = Math.round((QUEUE_ABOVE / TILE_BARS_HEIGHT) * SLOT_HEIGHT);
 
 /** The example cell's own padding, in px, so the slot can cancel it exactly. */
 const CELL_PAD = 12;
@@ -478,8 +492,10 @@ function ExampleCell({ active }: { active: Feature | null }) {
               sx={{
                 position: "absolute",
                 left: "100%",
-                bottom: 0,
-                height: "100%",
+                // Reaches below and above the day bars' slot, as it does on a real
+                // row. See EX_QUEUE_BELOW.
+                bottom: -EX_QUEUE_BELOW,
+                height: `calc(100% + ${EX_QUEUE_BELOW + EX_QUEUE_ABOVE}px)`,
                 width: 18,
                 transform: "translateX(-50%)",
                 display: "flex",
@@ -536,8 +552,8 @@ function ExampleCell({ active }: { active: Feature | null }) {
               sx={{
                 position: "absolute",
                 left: `calc(100% + 20px)`,
-                bottom: 0,
-                height: "100%",
+                bottom: -EX_QUEUE_BELOW,
+                height: `calc(100% + ${EX_QUEUE_BELOW + EX_QUEUE_ABOVE}px)`,
                 width: RIGHT_GUTTER - 26,
                 ...dim("queueAxis"),
                 ...ring("queueAxis"),

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Box, Tooltip } from "@mui/material";
 
 import type { BarScale } from "../types";
-import { QUEUE_HEIGHT_CAP, barFraction, type ScaleKind } from "./binModel";
+import { barFraction, type ScaleKind } from "./binModel";
 import BinReadout, { READOUT_PLACEMENT, READOUT_SLOT_PROPS } from "./BinReadout";
 import { formatDayShort, type DayQueue } from "./dayCards";
 import QueueGlyph from "./QueueGlyph";
@@ -65,7 +65,10 @@ export default function TileQueueBar({
   onHoverScale,
 }: TileQueueBarProps) {
   const [hovered, setHovered] = useState(false);
-  const fraction = barFraction(queue.total, Math.max(peak, 1), scale) * QUEUE_HEIGHT_CAP;
+  // Fills the slot at its own maximum, exactly as the activity bars do: the
+  // tallest queue in the window reaches the same height as the busiest 4-hour
+  // window, each at the top of its own scale.
+  const fraction = barFraction(queue.total, Math.max(peak, 1), scale);
 
   return (
     <Tooltip

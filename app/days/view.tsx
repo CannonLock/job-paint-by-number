@@ -353,23 +353,6 @@ export default function DaysView({ data, dayData }: DaysViewProps) {
                       key={option}
                       value={option}
                       aria-label={`${SCALE_LABELS[option]} bar scale`}
-                      // While the hint is up, the button it is about pulses, so
-                      // the prose and the control the reader needs are visibly
-                      // the same thing.
-                      sx={
-                        option === "log" && showScaleHint
-                          ? {
-                              borderColor: "primary.main",
-                              color: "primary.main",
-                              fontWeight: 700,
-                              animation: "daysScaleHintPulse 1.8s ease-in-out infinite",
-                              "@keyframes daysScaleHintPulse": {
-                                "0%, 100%": { boxShadow: "0 0 0 0 rgba(155, 0, 0, 0.45)" },
-                                "50%": { boxShadow: "0 0 0 5px rgba(155, 0, 0, 0)" },
-                              },
-                            }
-                          : undefined
-                      }
                     >
                       {SCALE_LABELS[option]}
                     </ToggleButton>
@@ -478,9 +461,12 @@ export default function DaysView({ data, dayData }: DaysViewProps) {
             in a ratio bar are the queue. Because it is a headcount and
             not a count of changes it carries its own scale, down the right of the calendar
             under the same stacked glyph — measured against the largest queue anywhere in
-            the window, so queue heights stay comparable from month to month. Hovering
-            either kind of bar lights up the scale that governs it. Light blue is work
-            already in flight when the day opened; dark blue arrived during it.
+            the window, so queue heights stay comparable from month to month. It is also
+            drawn over a taller range than the day bars, reaching a little below and well
+            above them: a queue level drifts slowly, and the extra height is what makes its
+            changes visible at all. Hovering either kind of bar lights up the scale that
+            governs it. Light blue is work already in flight when the day opened; dark blue
+            arrived during it.
           </Typography>
         </Box>
 

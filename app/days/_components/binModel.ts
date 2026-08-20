@@ -285,6 +285,26 @@ function binLabel(bin: number, binHours: number): string {
 export const TILE_BARS_HEIGHT = 88;
 
 /**
+ * How far the queue marker reaches past the day bars' slot, below and above, in
+ * pixels.
+ *
+ * Deliberately a wider range than the day bars get, not the same one. The queue is
+ * a level that drifts -- it can sit near its peak for a fortnight -- so squeezed
+ * into the same 88 pixels its changes are barely visible. Spending the tile's spare
+ * vertical space on it exaggerates exactly the differences a reader is looking for.
+ *
+ * Both queue axes stretch with the bars, so each still reads truthfully against its
+ * own labels, and the two axes' top ticks no longer sit at the same height -- useful
+ * in itself, since the scales measure different things and were never comparable.
+ *
+ * Bounded by what a tile has to spare: below, the caption band and the bottom
+ * padding, with the marker's glyph riding down with it; above, the gap and the date
+ * line, which the marker clears horizontally because it sits at the tile's edge.
+ */
+export const QUEUE_BELOW = 12;
+export const QUEUE_ABOVE = 22;
+
+/**
  * Floor TileActivityBars applies so a bin with any activity stays visible. A bar
  * this short is no longer encoding its value -- it is the floor, and every bar
  * sitting on it looks identical whatever its count.
@@ -360,16 +380,6 @@ export function buildScaleAdvice(entries: [string, DayActivity][]): ScaleAdvice 
  */
 export type ScaleKind = "activity" | "queue";
 
-/**
- * Fraction of the slot a queue marker may fill at its own maximum.
- *
- * Held below the top on purpose: a queue bar whose top lined up with the activity
- * axis's highest tick would invite reading it against the wrong scale. Ratios
- * between queue bars are unaffected, since every one is scaled by the same factor,
- * and the queue axis is built with the same cap so its labels stay true.
- */
-export const QUEUE_HEIGHT_CAP = 0.8;
-
 /** One labelled gridline on a tile's height axis. */
 export interface ScaleTick {
   /** The count (or percentage) the line stands for. */
@@ -399,17 +409,17 @@ const MIN_TICK_GAP = 0.22;
  * bottom decade lands a few pixels above zero and would otherwise print on top
  * of it.
  */
-export function buildScaleTicks(peak: number, scale: BarScale, cap = 1): ScaleTick[] {
+export function buildScaleTicks(peak: number, scale: BarScale): ScaleTick[] {
   if (peak <= 0) return [];
 
-  const at = (value: number) => ({ value, fraction: barFraction(value, peak, scale) * cap });
+  const at = (value: number) => ({ value, fraction: barFraction(value, peak, scale) });
 
   const floor: ScaleTick = { value: 0, fraction: 0 };
-  const top: ScaleTick = { value: peak, fraction: cap };
+  const top: ScaleTick = { value: peak, fraction: 1 };
 
-  // Everything between the peak and the floor, descending. Capped alongside the
-  // bars, so the labels sit exactly where the values they name are drawn, and the
-  // thinning below measures the gaps the reader will actually see.
+  // Everything between the peak and the floor, descending. Positioned with the
+  // same function the bars use, so a label sits exactly where the value it names
+  // is drawn, and the thinning below measures the gaps the reader will see.
   const middle: ScaleTick[] = [];
   if (scale === "linear") {
     const half = Math.round(peak / 2);
@@ -433,7 +443,14 @@ export function buildScaleTicks(peak: number, scale: BarScale, cap = 1): ScaleTi
 }
 
 /**
- * Bar height as a fraction of the tallest bin on screen, under either scale.
+ * Bar height as a fraction of the tallest value on screen, under either scale.
+ *
+ * Every kind of bar fills its own slot at its own maximum. Those slots are not the
+ * same size: the queue marker is given a taller one than the day bars (see
+ * QUEUE_BELOW in JobCalendar), because a queue level drifts slowly and needs the
+ * extra range for its changes to show. Each bar is measured against its own peak
+ * and read against its own axis, which stretches with it -- so a bar at full height
+ * always means "the top of this scale", whichever scale that is.
  *
  * Linear is the honest one -- twice as tall is twice as much work -- but with a
  * 900,000-change peak on the page a 66-change bin is a fraction of a pixel and
