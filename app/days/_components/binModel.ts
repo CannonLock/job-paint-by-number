@@ -70,6 +70,12 @@ export interface BinCensus {
   removed: number;
   /** Placed today, cumulative up to this bin. */
   placedSoFar: number;
+  /**
+   * Clock time the census was taken: the instant the window closes. The bars are
+   * a reading at that moment, not a summary of the window, so the readout names
+   * the moment rather than the span.
+   */
+  snapshotAt: string;
   /** True when everything in play has reached a final state by this bin's end. */
   terminal: boolean;
   /**
@@ -171,6 +177,7 @@ export function buildDayCensus(
       completed,
       removed,
       placedSoFar: placedCum,
+      snapshotAt: snapshotLabel(b, data.binHours),
       terminal: inPlay > 0 && activeTotal === 0,
       // Filled in below, once the whole day is known.
       drawn: true,
@@ -254,6 +261,13 @@ export function buildDayActivity(
   }
 
   return { bins, total, hasData: total > 0 };
+}
+
+/** "04:00" -- the clock time bin 0 of a 4-hour bake closes at. */
+function snapshotLabel(bin: number, binHours: number): string {
+  const hour = (bin + 1) * binHours;
+  // The last window closes at the end of the day, which nobody calls 24:00.
+  return hour >= 24 ? "midnight" : `${String(hour).padStart(2, "0")}:00`;
 }
 
 /** "00–04" for bin 0 of a 4-hour bake. */

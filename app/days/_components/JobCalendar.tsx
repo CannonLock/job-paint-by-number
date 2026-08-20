@@ -179,7 +179,10 @@ export default function JobCalendar({
           gap: `${TILE_GAP}px`,
           // Tall enough for the date, the bars slot, and its caption.
           minHeight: 136,
-          padding: `${TILE_PAD_Y}px 4px`,
+          // No horizontal padding: the journey bars run edge to edge so one day's
+          // census meets the next day's. Everything else in the tile is centred
+          // text, which does not miss the inset.
+          padding: `${TILE_PAD_Y}px 0`,
           border: "1px solid",
           borderColor: "divider",
           background: "none",
@@ -420,7 +423,10 @@ function TileBody({
         }}
       >
         {barsVisible && slice ? (
-          <Box sx={{ width: "100%", maxWidth: 104, minWidth: 0 }}>
+          // The journey bars span the tile so they butt against the neighbouring
+          // day's; the magnitude bars stay inset and centred, where a gap between
+          // days is correct -- each is its own independent total, not a series.
+          <Box sx={{ width: "100%", maxWidth: census ? "none" : 104, minWidth: 0 }}>
             {census ? (
               <TileBars
                 bins={census.bins}

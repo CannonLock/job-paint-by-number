@@ -244,9 +244,9 @@ export default function DayDialog({
                             component="p"
                             sx={{ color: "text.secondary", mt: 0.5, fontStyle: "italic" }}
                           >
-                            The cluster&apos;s last job reached a final state in the{" "}
-                            {census.bins[census.finishedAt].label} window, so the rest of the
-                            day is left blank rather than repeating an all-finished bar.
+                            The last job reached a final state by{" "}
+                            {census.bins[census.finishedAt].snapshotAt}, so the rest of the day
+                            is left blank rather than repeating an all-finished reading.
                           </Typography>
                         )}
                       </Box>

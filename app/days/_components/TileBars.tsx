@@ -25,9 +25,28 @@ interface TileBarsProps {
 }
 
 /**
+ * Share of each column given over to the end-of-window emphasis.
+ *
+ * Each bar is a census taken at the instant its 4-hour window closes, not a
+ * summary of what happened across it -- a distinction the bars had no way of
+ * showing. The right-hand slice keeps the full colour and the rest is veiled, so
+ * the eye lands on the moment the reading was actually taken. With the columns
+ * running edge to edge these also read as tick marks at every window boundary.
+ */
+const SNAPSHOT_SHARE = "15%";
+
+/** How much the body of a column is lightened next to its snapshot edge. */
+const VEIL = "rgba(255,255,255,0.3)";
+
+/**
  * The calendar-tile variant of the day chart: six 100%-stacked columns, colour
  * only -- no axes, no text. Plain divs rather than a Chart.js canvas: a month
  * renders ~30 of these and flexbox needs no per-tile chart lifecycle.
+ *
+ * The columns are contiguous and span the tile edge to edge, so one day's census
+ * runs straight into the next day's. These bars are cumulative -- a single series
+ * carried across the whole window -- so gaps between days would break a line that
+ * is genuinely continuous.
  *
  * Two kinds of column draw nothing. A bin with nothing in play yet is genuinely
  * empty; a bin past the end of the cluster's work is suppressed on purpose (see
@@ -55,15 +74,19 @@ export default function TileBars({
     onHoverScale?.(null);
   };
 
-  // A suppressed bin lists no counts. Its census still holds the finished
-  // cohort, but printing "1,935 completed" beside "nothing left in play" reads
-  // as a contradiction -- the footer is the whole story for those bins.
+  // Share first, count second: these bars are 100%-stacked, so the percentage is
+  // the reading and the count is only the supporting detail.
+  //
+  // A suppressed bin lists nothing at all. Its census still holds the finished
+  // cohort, but printing "1,935 completed" beside "nothing left in play" reads as
+  // a contradiction -- the footer is the whole story for those bins.
   const rows: ReadoutRow[] = bin?.drawn
     ? BAR_SEGMENT_ORDER.filter((state) => bin[state] > 0).map((state) => ({
         label: SEGMENT_STYLES[state].label.toLowerCase(),
         color: SEGMENT_STYLES[state].color,
         value: bin[state],
         share: bin.inPlay > 0 ? (bin[state] / bin.inPlay) * 100 : null,
+        lead: "share" as const,
       }))
     : [];
 
@@ -78,22 +101,25 @@ export default function TileBars({
       title={
         bin ? (
           <BinReadout
-            title={`${dayLabel} · ${bin.label} h`}
-            subtitle={
-              bin.drawn
-                ? `${bin.inPlay.toLocaleString()} jobs in play by the end of this window`
-                : undefined
-            }
+            // The moment the census was taken, not the window that closed. That is
+            // what the bar is: a reading at an instant.
+            title={`${dayLabel} · ${bin.snapshotAt}`}
             rows={rows}
-            footer={
-              !bin.drawn
-                ? finishedAt !== null
-                  ? `Nothing left in play — the cluster finished in the ${bins[finishedAt].label} window, so later bars are not drawn.`
-                  : "Nothing in play in this window."
+            // The denominator sits at the foot. In this view it barely moves from
+            // one bar to the next -- it is the whole group's job count -- so
+            // leading with it buried the figures that do change.
+            footer={[
+              ...(bin.drawn ? [`${bin.inPlay.toLocaleString()} jobs in play`] : []),
+              ...(!bin.drawn
+                ? [
+                    finishedAt !== null
+                      ? `Nothing left in play — finished at ${bins[finishedAt].snapshotAt}, so later bars are not drawn.`
+                      : "Nothing in play at this point.",
+                  ]
                 : bin.terminal
-                  ? "Every job is in a final state: this is where the cluster finished."
-                  : undefined
-            }
+                  ? ["Every job is in a final state: this is where the work finished."]
+                  : []),
+            ]}
           />
         ) : (
           ""
@@ -104,13 +130,14 @@ export default function TileBars({
         role="img"
         aria-label={label}
         onMouseLeave={leave}
-        sx={{ display: "flex", gap: "2px", width: "100%", height, alignItems: "stretch" }}
+        sx={{ display: "flex", width: "100%", height, alignItems: "stretch" }}
       >
         {bins.map((entry, i) => (
           <Box
             key={i}
             onMouseEnter={() => enter(i)}
             sx={{
+              position: "relative",
               flex: 1,
               minWidth: 0,
               display: "flex",
@@ -118,10 +145,9 @@ export default function TileBars({
               // completed above it, removed on top. Column-reverse keeps the
               // segment order identical to BAR_SEGMENT_ORDER.
               flexDirection: "column-reverse",
-              borderRadius: "1px",
               overflow: "hidden",
               // The hovered column lifts out of the row without moving anything.
-              opacity: hovered === null || hovered === i ? 1 : 0.55,
+              opacity: hovered === null || hovered === i ? 1 : 0.3,
             }}
           >
             {entry.drawn &&
@@ -135,6 +161,21 @@ export default function TileBars({
                   }}
                 />
               ))}
+            {/* Veils everything but the window's closing edge; see
+                SNAPSHOT_SHARE. */}
+            {entry.drawn && (
+              <Box
+                sx={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: 0,
+                  right: SNAPSHOT_SHARE,
+                  backgroundColor: VEIL,
+                  pointerEvents: "none",
+                }}
+              />
+            )}
           </Box>
         ))}
       </Box>

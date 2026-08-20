@@ -49,6 +49,13 @@ export interface ReadoutRow {
   value: number;
   /** Percent of the bin, when the bin has a meaningful denominator. */
   share?: number | null;
+  /**
+   * Which figure leads the line. Counts lead by default, because for a bar that
+   * measures work done the count IS the reading. A bar that measures a share of a
+   * whole -- the 100%-stacked journey bars -- wants the percentage in front, with
+   * the count as the supporting detail.
+   */
+  lead?: "value" | "share";
 }
 
 function formatShare(share: number): string {
@@ -75,7 +82,8 @@ export default function BinReadout({
   title: string;
   subtitle?: string;
   rows: ReadoutRow[];
-  footer?: string;
+  /** A list renders one line each, for a readout with more than one caveat. */
+  footer?: string | string[];
 }) {
   return (
     <Box sx={{ py: 0.25, minWidth: 168 }}>
@@ -88,36 +96,42 @@ export default function BinReadout({
         </Typography>
       )}
       <Stack spacing={0.15} sx={{ mt: 0.5 }}>
-        {rows.map((row) => (
-          <Stack key={row.label} direction="row" spacing={0.75} alignItems="baseline">
-            <Box
-              sx={{
-                width: 8,
-                height: 8,
-                borderRadius: "2px",
-                backgroundColor: row.color,
-                flexShrink: 0,
-                transform: "translateY(1px)",
-              }}
-            />
-            <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.5 }}>
-              {row.value.toLocaleString()}
-            </Typography>
-            <Typography variant="caption" sx={{ lineHeight: 1.5, opacity: 0.85 }}>
-              {row.label}
-              {row.share != null && ` · ${formatShare(row.share)}`}
-            </Typography>
-          </Stack>
-        ))}
+        {rows.map((row) => {
+          const leadsWithShare = row.lead === "share" && row.share != null;
+          return (
+            <Stack key={row.label} direction="row" spacing={0.75} alignItems="baseline">
+              <Box
+                sx={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "2px",
+                  backgroundColor: row.color,
+                  flexShrink: 0,
+                  transform: "translateY(1px)",
+                }}
+              />
+              <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1.5 }}>
+                {leadsWithShare ? formatShare(row.share as number) : row.value.toLocaleString()}
+              </Typography>
+              <Typography variant="caption" sx={{ lineHeight: 1.5, opacity: 0.85 }}>
+                {row.label}
+                {leadsWithShare
+                  ? ` · ${row.value.toLocaleString()}`
+                  : row.share != null && ` · ${formatShare(row.share)}`}
+              </Typography>
+            </Stack>
+          );
+        })}
       </Stack>
-      {footer && (
+      {(Array.isArray(footer) ? footer : footer ? [footer] : []).map((line) => (
         <Typography
+          key={line}
           variant="caption"
           sx={{ display: "block", mt: 0.5, lineHeight: 1.5, opacity: 0.8, fontStyle: "italic" }}
         >
-          {footer}
+          {line}
         </Typography>
-      )}
+      ))}
     </Box>
   );
 }

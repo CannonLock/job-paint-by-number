@@ -27,10 +27,13 @@ interface DayStackedBarsProps {
 }
 
 /**
- * One day as six 100%-stacked bars, one per 4-hour bin.
+ * One day as six 100%-stacked bars: a census of the group's whole cohort taken
+ * every four hours.
  *
- * The view is percentages so a 500-job day and a 900,000-job day both read as
- * "how did the day's work resolve"; the absolute counts live in the tooltip.
+ * Each bar is a reading at an instant, not a summary of a window, so it is
+ * labelled with the clock time the reading was taken. The view is percentages so
+ * a 500-job group and a 900,000-job group both read as "how has this resolved";
+ * the absolute counts live in the tooltip.
  *
  * Bins the model marked undrawn get null data points rather than zeroes: they
  * keep their tick on the axis -- the day is still 24 hours long -- but draw
@@ -40,7 +43,10 @@ interface DayStackedBarsProps {
 export default function DayStackedBars({ bins, height = 320, label }: DayStackedBarsProps) {
   const { data, options } = useMemo(() => {
     const data = {
-      labels: bins.map((bin) => bin.label),
+      // Labelled by the instant each census was taken, not by the window that
+      // closed. These bars are readings at a point in time; calling them "00-04"
+      // invited reading them as a summary of those four hours.
+      labels: bins.map((bin) => bin.snapshotAt),
       datasets: BAR_SEGMENT_ORDER.map((state) => ({
         label: SEGMENT_STYLES[state].label,
         data: bins.map((bin) =>
@@ -60,7 +66,7 @@ export default function DayStackedBars({ bins, height = 320, label }: DayStacked
       scales: {
         x: {
           stacked: true,
-          title: { display: true, text: "Hour of day" },
+          title: { display: true, text: "Snapshot time" },
           grid: { display: false },
         },
         y: {
@@ -75,7 +81,7 @@ export default function DayStackedBars({ bins, height = 320, label }: DayStacked
         legend: { position: "bottom" as const, labels: { boxWidth: 14, boxHeight: 14 } },
         tooltip: {
           callbacks: {
-            title: (items: TooltipItem<"bar">[]) => (items.length > 0 ? `${items[0].label} h` : ""),
+            title: (items: TooltipItem<"bar">[]) => (items.length > 0 ? String(items[0].label) : ""),
             // Percent on screen, totals on hover -- this is where the absolute
             // numbers live.
             label: (ctx: TooltipItem<"bar">) => {
@@ -88,7 +94,7 @@ export default function DayStackedBars({ bins, height = 320, label }: DayStacked
             footer: (items: TooltipItem<"bar">[]) => {
               if (items.length === 0) return "";
               const bin = bins[items[0].dataIndex];
-              const base = `${bin.inPlay.toLocaleString()} jobs in play by the end of this bin`;
+              const base = `${bin.inPlay.toLocaleString()} jobs in play at this point`;
               return bin.terminal ? `${base} · all of them in a final state` : base;
             },
           },

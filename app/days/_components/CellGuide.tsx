@@ -106,7 +106,7 @@ const FEATURES: Feature[] = [
   {
     id: "finished",
     title: "Blank bars can mean finished",
-    body: "With one cluster or batch selected the bars are cumulative, and once its last job reaches a final state the day draws that one all-finished bar and stops. Empty windows after it mean the work is done, not that the data ran out.",
+    body: "With one cluster or batch selected the bars stop being windows and become snapshots — a census of the whole group taken every four hours — and they are cumulative. Once its last job reaches a final state the day draws that one all-finished reading and stops; the blanks after it mean the work is done, not that the data ran out.",
     parts: ["bars"],
   },
 ];

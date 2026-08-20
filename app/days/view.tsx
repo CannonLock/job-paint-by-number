@@ -449,13 +449,17 @@ export default function DaysView({ data, dayData }: DaysViewProps) {
             component="p"
             sx={{ color: "text.secondary", display: "block" }}
           >
-            With one cluster or batch selected, the bars are cumulative snapshots: each bin
-            shows where all of that group&apos;s work stands at the bin&apos;s end, so
-            Completed and Removed only ever grow. Once every job has reached a final state
-            the day draws that one all-finished bar and then stops — the blank bins after it
-            mean the group is done, not that the data ran out. With nothing filtered out the
-            bars are per-bin transition counts instead, so an idle 4-hour window is simply
-            empty.
+            With one cluster or batch selected, each bar is not a window at all but a
+            snapshot: a census of the whole group taken every four hours, at 04:00, 08:00 and
+            so on to midnight. The darker sliver down the right of each bar marks the instant
+            the reading was taken. They are cumulative, so Completed and Removed only ever
+            grow, and because it is one continuous series the bars run edge to edge, straight
+            into the next day&apos;s. Once every job has reached a final state the day draws
+            that one all-finished reading and then stops: the blanks after it mean the group
+            is done, not that the data ran out. With nothing filtered out the bars mean
+            something different — each is a count of the transitions inside its own 4-hour
+            window, independent of its neighbours, so those keep their gaps and an idle
+            window is simply empty.
           </Typography>
           <Typography
             variant="caption"
